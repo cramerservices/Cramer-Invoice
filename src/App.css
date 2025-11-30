@@ -4,24 +4,90 @@
   flex-direction: column;
 }
 
-.app-header {
+.app-nav {
   background-color: #2c3e50;
   color: white;
-  padding: 24px;
+  padding: 0 24px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
 }
 
-.app-header h1 {
-  font-size: 28px;
+.nav-brand h1 {
+  font-size: 24px;
   font-weight: 600;
-  max-width: 1200px;
-  margin: 0 auto;
+  margin: 16px 0;
+}
+
+.nav-links {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.nav-links button {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.8);
+  padding: 16px 20px;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  border-bottom: 3px solid transparent;
+}
+
+.nav-links button:hover {
+  color: white;
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.nav-links button.active {
+  color: white;
+  border-bottom-color: #3498db;
+  background-color: rgba(255, 255, 255, 0.05);
 }
 
 .app-main {
   flex: 1;
   padding: 32px 24px;
-  max-width: 1200px;
+  max-width: 1400px;
   margin: 0 auto;
   width: 100%;
+}
+
+@media (max-width: 768px) {
+  .app-nav {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 16px;
+  }
+
+  .nav-brand {
+    text-align: center;
+  }
+
+  .nav-links {
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .nav-links button {
+    text-align: left;
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    border-left: 3px solid transparent;
+  }
+
+  .nav-links button.active {
+    border-bottom-color: rgba(255, 255, 255, 0.1);
+    border-left-color: #3498db;
+  }
+
+  .app-main {
+    padding: 16px;
+  }
 }
