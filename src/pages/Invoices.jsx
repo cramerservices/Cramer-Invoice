@@ -26,6 +26,38 @@ function Invoices() {
     fetchData();
   }, []);
 
+  useEffect(() => {
+    if (showForm) {
+      generateInvoiceNumber();
+    }
+  }, [showForm]);
+
+  const generateInvoiceNumber = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('crm_invoices')
+        .select('invoice_number')
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (error) throw error;
+
+      let newNumber = 'INV-0001';
+      if (data && data.length > 0) {
+        const lastNumber = data[0].invoice_number;
+        const match = lastNumber.match(/INV-(\d+)/);
+        if (match) {
+          const nextNum = parseInt(match[1]) + 1;
+          newNumber = `INV-${String(nextNum).padStart(4, '0')}`;
+        }
+      }
+
+      setFormData(prev => ({ ...prev, invoiceNumber: newNumber }));
+    } catch (error) {
+      console.error('Error generating invoice number:', error);
+    }
+  };
+
   const fetchData = async () => {
     try {
       const [invoicesRes, customersRes] = await Promise.all([
@@ -330,6 +362,8 @@ function Invoices() {
                   value={formData.invoiceNumber}
                   onChange={handleInputChange}
                   required
+                  readOnly
+                  style={{ backgroundColor: '#ecf0f1', cursor: 'not-allowed' }}
                 />
               </div>
               <div className="form-group">

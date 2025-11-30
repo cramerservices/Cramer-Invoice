@@ -25,6 +25,38 @@ function Estimates() {
     fetchData();
   }, []);
 
+  useEffect(() => {
+    if (showForm) {
+      generateEstimateNumber();
+    }
+  }, [showForm]);
+
+  const generateEstimateNumber = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('estimates')
+        .select('estimate_number')
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (error) throw error;
+
+      let newNumber = 'EST-0001';
+      if (data && data.length > 0) {
+        const lastNumber = data[0].estimate_number;
+        const match = lastNumber.match(/EST-(\d+)/);
+        if (match) {
+          const nextNum = parseInt(match[1]) + 1;
+          newNumber = `EST-${String(nextNum).padStart(4, '0')}`;
+        }
+      }
+
+      setFormData(prev => ({ ...prev, estimateNumber: newNumber }));
+    } catch (error) {
+      console.error('Error generating estimate number:', error);
+    }
+  };
+
   const fetchData = async () => {
     try {
       const [estimatesRes, customersRes] = await Promise.all([
@@ -315,6 +347,8 @@ function Estimates() {
                   value={formData.estimateNumber}
                   onChange={handleInputChange}
                   required
+                  readOnly
+                  style={{ backgroundColor: '#ecf0f1', cursor: 'not-allowed' }}
                 />
               </div>
               <div className="form-group">
