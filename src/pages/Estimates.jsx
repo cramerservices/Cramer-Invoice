@@ -2,6 +2,17 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { jsPDF } from 'jspdf';
 import './Customers.css';
+async function fetchAsDataURL(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to load image: ${url}`);
+  const blob = await res.blob();
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
 
 function Estimates() {
   const [estimates, setEstimates] = useState([]);
@@ -187,124 +198,150 @@ function Estimates() {
       alert('Failed to update status');
     }
   };
+const downloadPDF = async (estimateId) => {
+  try {
+    const { data: estimate, error: estErr } = await supabase
+      .from('estimates')
+      .select('*, customers(*)')
+      .eq('id', estimateId)
+      .single();
+    if (estErr) throw estErr;
 
-  const downloadPDF = async (estimateId) => {
-    try {
-      const { data: estimate } = await supabase
-        .from('estimates')
-        .select('*, customers(*)')
-        .eq('id', estimateId)
-        .single();
+    const { data: items, error: itemsErr } = await supabase
+      .from('estimate_line_items')
+      .select('*')
+      .eq('estimate_id', estimateId)
+      .order('sort_order');
+    if (itemsErr) throw itemsErr;
 
-      const { data: items } = await supabase
-        .from('estimate_line_items')
-        .select('*')
-        .eq('estimate_id', estimateId)
-        .order('sort_order');
+    const doc = new jsPDF({ unit: 'mm', format: 'letter' });
+    const pageWidth = doc.internal.pageSize.getWidth();
 
-      const doc = new jsPDF();
-      const pageWidth = doc.internal.pageSize.width;
-      let yPosition = 20;
+    // Load logo from /public
+    const logo = await fetchAsDataURL('/CramerLogoText.png');
 
-      doc.setFontSize(24);
-      doc.setFont(undefined, 'bold');
-      doc.text('ESTIMATE', pageWidth / 2, yPosition, { align: 'center' });
+    // Header bar
+    doc.setFillColor(18, 126, 210);
+    doc.rect(0, 0, pageWidth, 28, 'F');
 
-      yPosition += 15;
-      doc.setFontSize(10);
-      doc.setFont(undefined, 'normal');
-      doc.text(`Estimate #: ${estimate.estimate_number}`, 20, yPosition);
-      yPosition += 6;
-      doc.text(`Date: ${new Date(estimate.estimate_date).toLocaleDateString()}`, 20, yPosition);
-      if (estimate.expiry_date) {
-        yPosition += 6;
-        doc.text(`Expires: ${new Date(estimate.expiry_date).toLocaleDateString()}`, 20, yPosition);
+    // Logo
+    doc.addImage(logo, 'PNG', 10, 6, 55, 16);
+
+    // Title / meta
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(16);
+    doc.text('ESTIMATE', pageWidth - 10, 12, { align: 'right' });
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.text(`Estimate #: ${estimate.estimate_number}`, pageWidth - 10, 18, { align: 'right' });
+    doc.text(`Date: ${new Date(estimate.estimate_date).toLocaleDateString()}`, pageWidth - 10, 24, { align: 'right' });
+
+    // Reset text
+    doc.setTextColor(20, 20, 20);
+
+    let y = 40;
+
+    // Customer block
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text('Bill To', 10, y);
+    doc.text('Details', pageWidth / 2 + 5, y);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+
+    const cust = estimate.customers || {};
+    const leftLines = [
+      cust.name || '',
+      cust.address || '',
+      cust.phone ? `Phone: ${cust.phone}` : '',
+      cust.email ? `Email: ${cust.email}` : ''
+    ].filter(Boolean);
+
+    const rightLines = [
+      estimate.tech_name ? `Technician: ${estimate.tech_name}` : '',
+      estimate.expiry_date ? `Expires: ${new Date(estimate.expiry_date).toLocaleDateString()}` : '',
+      estimate.status ? `Status: ${String(estimate.status).toUpperCase()}` : ''
+    ].filter(Boolean);
+
+    leftLines.forEach((line, i) => doc.text(line, 10, y + 8 + i * 5));
+    rightLines.forEach((line, i) => doc.text(line, pageWidth / 2 + 5, y + 8 + i * 5));
+
+    y += 35;
+
+    // Line items header
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text('Line Items', 10, y);
+    y += 8;
+
+    doc.setFontSize(9);
+    doc.text('Description', 10, y);
+    doc.text('Material', 120, y, { align: 'right' });
+    doc.text('Labor', 150, y, { align: 'right' });
+    doc.text('Total', pageWidth - 10, y, { align: 'right' });
+
+    y += 2;
+    doc.setDrawColor(220);
+    doc.line(10, y, pageWidth - 10, y);
+    y += 6;
+
+    doc.setFont('helvetica', 'normal');
+
+    const money = (n) => `$${(Number(n || 0)).toFixed(2)}`;
+
+    for (const item of (items || [])) {
+      // page break
+      if (y > 250) {
+        doc.addPage();
+        y = 20;
       }
 
-      yPosition += 15;
-      doc.setFont(undefined, 'bold');
-      doc.text('CUSTOMER:', 20, yPosition);
-      yPosition += 6;
-      doc.setFont(undefined, 'normal');
-      doc.text(estimate.customers.name, 20, yPosition);
-      if (estimate.customers.address) {
-        yPosition += 6;
-        doc.text(estimate.customers.address, 20, yPosition);
-      }
+      const descLines = doc.splitTextToSize(item.description || '', 95);
+      descLines.forEach((line, i) => doc.text(line, 10, y + i * 5));
 
-      yPosition += 15;
-      doc.setFont(undefined, 'bold');
-      doc.text('TECHNICIAN:', 20, yPosition);
-      yPosition += 6;
-      doc.setFont(undefined, 'normal');
-      doc.text(estimate.tech_name, 20, yPosition);
+      doc.text(money(item.material_cost), 120, y, { align: 'right' });
+      doc.text(money(item.labor_cost), 150, y, { align: 'right' });
+      doc.text(money(item.total_cost), pageWidth - 10, y, { align: 'right' });
 
-      yPosition += 15;
-      doc.setFontSize(12);
-      doc.setFont(undefined, 'bold');
-      doc.text('LINE ITEMS', 20, yPosition);
-      yPosition += 8;
-
-      doc.setFontSize(9);
-      doc.text('Description', 20, yPosition);
-      doc.text('Material', 120, yPosition);
-      doc.text('Labor', 145, yPosition);
-      doc.text('Total', 170, yPosition);
-      yPosition += 5;
-      doc.line(20, yPosition, pageWidth - 20, yPosition);
-      yPosition += 6;
-
-      doc.setFont(undefined, 'normal');
-      items.forEach((item) => {
-        if (yPosition > 270) {
-          doc.addPage();
-          yPosition = 20;
-        }
-
-        const descLines = doc.splitTextToSize(item.description, 95);
-        descLines.forEach((line, i) => {
-          doc.text(line, 20, yPosition + (i * 5));
-        });
-
-        doc.text(`$${parseFloat(item.material_cost).toFixed(2)}`, 120, yPosition);
-        doc.text(`$${parseFloat(item.labor_cost).toFixed(2)}`, 145, yPosition);
-        doc.text(`$${parseFloat(item.total_cost).toFixed(2)}`, 170, yPosition);
-
-        yPosition += Math.max(descLines.length * 5, 6) + 4;
-      });
-
-      yPosition += 5;
-      doc.line(20, yPosition, pageWidth - 20, yPosition);
-      yPosition += 8;
-
-      doc.setFontSize(12);
-      doc.setFont(undefined, 'bold');
-      doc.text('TOTAL:', 145, yPosition);
-      doc.text(`$${parseFloat(estimate.total_amount).toFixed(2)}`, 170, yPosition);
-
-      if (estimate.notes) {
-        yPosition += 15;
-        doc.setFontSize(10);
-        doc.text('NOTES:', 20, yPosition);
-        yPosition += 6;
-        doc.setFont(undefined, 'normal');
-        const notesLines = doc.splitTextToSize(estimate.notes, pageWidth - 40);
-        notesLines.forEach(line => {
-          if (yPosition > 270) {
-            doc.addPage();
-            yPosition = 20;
-          }
-          doc.text(line, 20, yPosition);
-          yPosition += 5;
-        });
-      }
-
-      doc.save(`estimate-${estimate.estimate_number}.pdf`);
-    } catch (error) {
-      console.error('Error generating PDF:', error);
-      alert('Failed to generate PDF');
+      y += Math.max(descLines.length * 5, 6) + 3;
     }
-  };
+
+    // Total
+    y += 2;
+    doc.line(10, y, pageWidth - 10, y);
+    y += 8;
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.text('Total', 150, y, { align: 'right' });
+    doc.text(money(estimate.total_amount), pageWidth - 10, y, { align: 'right' });
+
+    // Notes
+    if (estimate.notes) {
+      y += 12;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.text('Notes / Terms', 10, y);
+      y += 6;
+
+      doc.setFont('helvetica', 'normal');
+      const wrapped = doc.splitTextToSize(estimate.notes, pageWidth - 20);
+      wrapped.forEach((line) => {
+        if (y > 260) { doc.addPage(); y = 20; }
+        doc.text(line, 10, y);
+        y += 5;
+      });
+    }
+
+    doc.save(`estimate-${estimate.estimate_number}.pdf`);
+  } catch (error) {
+    console.error('Error generating PDF:', error);
+    alert('Failed to generate PDF');
+  }
+};
 
   const resetForm = () => {
     setFormData({
