@@ -261,7 +261,7 @@ function Invoices() {
       let y = M;
 
       if (logoDataUrl) {
-        doc.addImage(logoDataUrl, 'PNG', M, y - 8, 210, 55);
+        doc.addImage(logoDataUrl, 'PNG', M, y - 8, 180, 47);
       } else {
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(18);
@@ -269,12 +269,12 @@ function Invoices() {
       }
 
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(9);
+      doc.setFontSize(8);
       const companyInfoX = M;
-      const companyInfoY = y + 60;
+      const companyInfoY = y + 50;
       doc.text(`Phone: ${COMPANY.phone}`, companyInfoX, companyInfoY);
-      doc.text(`Email: ${COMPANY.email}`, companyInfoX, companyInfoY + 12);
-      doc.text(`Website: ${COMPANY.website}`, companyInfoX, companyInfoY + 24);
+      doc.text(`Email: ${COMPANY.email}`, companyInfoX, companyInfoY + 10);
+      doc.text(`Website: ${COMPANY.website}`, companyInfoX, companyInfoY + 20);
 
       const rightBoxW = 220;
       const rightBoxX = pageW - M - rightBoxW;
@@ -318,7 +318,7 @@ function Invoices() {
         { align: 'right' }
       );
 
-      y = companyInfoY + 45;
+      y = companyInfoY + 35;
 
       const boxH = 110;
       const gap = 12;
@@ -382,7 +382,7 @@ function Invoices() {
       doc.text('[Work completed description]', jobX + 10, y + headerH + 55);
       doc.setTextColor(0, 0, 0);
 
-      y += boxH + 14;
+      y += boxH + 10;
 
       const tableX = M;
       const tableW = pageW - 2 * M;
@@ -396,24 +396,24 @@ function Invoices() {
       };
 
       doc.setFillColor(...BLUE);
-      doc.rect(tableX, y, tableW, 18, 'F');
+      doc.rect(tableX, y, tableW, 16, 'F');
       doc.setTextColor(255, 255, 255);
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(9);
-      doc.text('QTY', col.qty, y + 13);
-      doc.text('DESCRIPTION', col.desc, y + 13);
-      doc.text('MATERIAL', col.material, y + 13, { align: 'right' });
-      doc.text('LABOR', col.labor, y + 13, { align: 'right' });
-      doc.text('TOTAL', col.total, y + 13, { align: 'right' });
+      doc.setFontSize(8);
+      doc.text('QTY', col.qty, y + 11);
+      doc.text('DESCRIPTION', col.desc, y + 11);
+      doc.text('MATERIAL', col.material, y + 11, { align: 'right' });
+      doc.text('LABOR', col.labor, y + 11, { align: 'right' });
+      doc.text('TOTAL', col.total, y + 11, { align: 'right' });
 
       doc.setTextColor(0, 0, 0);
-      y += 24;
+      y += 20;
 
       doc.setDrawColor(200);
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(9);
+      doc.setFontSize(8);
 
-      const lineHeight = 14;
+      const lineHeight = 12;
 
       const ensureSpace = (needed) => {
         if (y + needed > pageH - 140) {
@@ -452,120 +452,120 @@ function Invoices() {
         y += rowH2;
       });
 
-      ensureSpace(160);
+      ensureSpace(140);
 
       const totalsW = 200;
       const totalsX = tableX + tableW - totalsW;
-      const totalsY = y + 10;
+      const totalsY = y + 8;
 
-      const totalBoxHeight = 88;
+      const totalBoxHeight = 72;
       doc.setDrawColor(180);
       doc.rect(totalsX, totalsY, totalsW, totalBoxHeight);
 
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(10);
+      doc.setFontSize(9);
 
       doc.setFillColor(...BLUE);
-      doc.rect(totalsX, totalsY, totalsW, 22, 'F');
+      doc.rect(totalsX, totalsY, totalsW, 18, 'F');
       doc.setTextColor(255, 255, 255);
-      doc.text('TOTAL', totalsX + 10, totalsY + 15);
-      doc.text(fmtMoney(Number(invoice.total_amount) || 0), totalsX + totalsW - 10, totalsY + 15, { align: 'right' });
+      doc.text('TOTAL', totalsX + 10, totalsY + 12);
+      doc.text(fmtMoney(Number(invoice.total_amount) || 0), totalsX + totalsW - 10, totalsY + 12, { align: 'right' });
 
       doc.setTextColor(0, 0, 0);
       doc.setFillColor(...LIGHT_GRAY);
-      doc.rect(totalsX, totalsY + 22, totalsW, 22, 'F');
-      doc.text('PAID', totalsX + 10, totalsY + 37);
+      doc.rect(totalsX, totalsY + 18, totalsW, 18, 'F');
+      doc.text('PAID', totalsX + 10, totalsY + 30);
       doc.setFont('helvetica', 'normal');
-      doc.text(fmtMoney(Number(invoice.amount_paid) || 0), totalsX + totalsW - 10, totalsY + 37, { align: 'right' });
+      doc.text(fmtMoney(Number(invoice.amount_paid) || 0), totalsX + totalsW - 10, totalsY + 30, { align: 'right' });
 
       doc.setFont('helvetica', 'bold');
       doc.setFillColor(...BLUE);
-      doc.rect(totalsX, totalsY + 44, totalsW, 22, 'F');
+      doc.rect(totalsX, totalsY + 36, totalsW, 18, 'F');
       doc.setTextColor(255, 255, 255);
-      doc.text('BALANCE DUE', totalsX + 10, totalsY + 59);
-      doc.text(fmtMoney(Number(invoice.amount_due) || 0), totalsX + totalsW - 10, totalsY + 59, { align: 'right' });
+      doc.text('BALANCE DUE', totalsX + 10, totalsY + 48);
+      doc.text(fmtMoney(Number(invoice.amount_due) || 0), totalsX + totalsW - 10, totalsY + 48, { align: 'right' });
 
       doc.setTextColor(0, 0, 0);
 
-      y = totalsY + totalBoxHeight + 20;
+      y = totalsY + totalBoxHeight + 12;
 
       if (payments && payments.length > 0) {
-        ensureSpace(120);
+        ensureSpace(100);
 
         doc.setFillColor(...BLUE);
-        doc.rect(M, y, tableW, 18, 'F');
+        doc.rect(M, y, tableW, 14, 'F');
         doc.setTextColor(255, 255, 255);
         doc.setFont('helvetica', 'bold');
-        doc.setFontSize(10);
-        doc.text('PAYMENT HISTORY', M + 10, y + 13);
+        doc.setFontSize(9);
+        doc.text('PAYMENT HISTORY', M + 10, y + 10);
         doc.setTextColor(0, 0, 0);
 
-        y += 24;
+        y += 18;
 
         doc.setFont('helvetica', 'bold');
-        doc.setFontSize(9);
+        doc.setFontSize(8);
         doc.text('DATE', M + 10, y);
         doc.text('AMOUNT', M + 120, y);
         doc.text('METHOD', M + 200, y);
         doc.text('REFERENCE', M + 300, y);
 
-        y += 6;
+        y += 5;
         doc.setDrawColor(200);
         doc.line(M, y, pageW - M, y);
-        y += 12;
+        y += 10;
 
         doc.setFont('helvetica', 'normal');
         payments.forEach((payment) => {
-          ensureSpace(30);
+          ensureSpace(25);
 
           doc.text(new Date(payment.payment_date).toLocaleDateString(), M + 10, y);
           doc.text(fmtMoney(Number(payment.amount)), M + 120, y);
           doc.text(safeText(payment.payment_method).toUpperCase(), M + 200, y);
           doc.text(safeText(payment.reference_number) || '-', M + 300, y);
 
-          y += 16;
+          y += 13;
         });
 
-        y += 10;
+        y += 8;
       }
 
-      ensureSpace(120);
+      ensureSpace(100);
 
       doc.setFillColor(...BLUE);
-      doc.rect(M, y, tableW, 18, 'F');
+      doc.rect(M, y, tableW, 14, 'F');
       doc.setTextColor(255, 255, 255);
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(10);
-      doc.text('SCOPE OF WORK', M + 10, y + 13);
+      doc.setFontSize(9);
+      doc.text('SCOPE OF WORK', M + 10, y + 10);
       doc.setTextColor(0, 0, 0);
 
-      y += 28;
-
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(9);
-
-      const scope = safeText(invoice.notes);
-      const scopeLines = doc.splitTextToSize(scope || '—', tableW - 20);
-      const scopeBoxH = Math.max(70, scopeLines.length * 12 + 20);
-
-      doc.setDrawColor(180);
-      doc.rect(M, y - 10, tableW, scopeBoxH);
-
-      let sy = y + 10;
-      scopeLines.forEach((line) => {
-        doc.text(line, M + 10, sy);
-        sy += 12;
-      });
-
-      y = y - 10 + scopeBoxH + 20;
-
-      ensureSpace(120);
+      y += 20;
 
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(8);
 
+      const scope = safeText(invoice.notes);
+      const scopeLines = doc.splitTextToSize(scope || '—', tableW - 20);
+      const scopeBoxH = Math.max(60, scopeLines.length * 10 + 16);
+
+      doc.setDrawColor(180);
+      doc.rect(M, y - 10, tableW, scopeBoxH);
+
+      let sy = y + 8;
+      scopeLines.forEach((line) => {
+        doc.text(line, M + 10, sy);
+        sy += 10;
+      });
+
+      y = y - 10 + scopeBoxH + 15;
+
+      ensureSpace(80);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7);
+
       doc.text('Please reference this invoice number in all correspondence.', M, y);
-      y += 12;
+      y += 10;
       doc.text(`Questions? ${COMPANY.phone} | ${COMPANY.email}`, M, y);
       y += 24;
 
