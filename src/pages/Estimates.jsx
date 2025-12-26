@@ -13,6 +13,28 @@ async function fetchAsDataURL(url) {
     reader.readAsDataURL(blob);
   });
 }
+const COMPANY = {
+  name: 'Cramer Services LLC',
+  phone: '314-267-8594',
+  email: 'cramerservicesllc@gmail.com',
+  website: 'www.cramerservicesllc.com'
+};
+
+// Works on GitHub Pages + custom domain
+const LOGO_URL = `${import.meta.env.BASE_URL}CramerLogoText.png`;
+
+async function fetchImageAsDataURL(url) {
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`Logo fetch failed: ${res.status}`);
+  const blob = await res.blob();
+
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
 
 function Estimates() {
   const [estimates, setEstimates] = useState([]);
@@ -205,6 +227,7 @@ const downloadPDF = async (estimateId) => {
       .select('*, customers(*)')
       .eq('id', estimateId)
       .single();
+
     if (estErr) throw estErr;
 
     const { data: items, error: itemsErr } = await supabase
@@ -212,136 +235,349 @@ const downloadPDF = async (estimateId) => {
       .select('*')
       .eq('estimate_id', estimateId)
       .order('sort_order');
+
     if (itemsErr) throw itemsErr;
 
-    const doc = new jsPDF({ unit: 'mm', format: 'letter' });
-    const pageWidth = doc.internal.pageSize.getWidth();
+    // Letter size in points: 612 x 792
+    const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+    const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
 
-    // Load logo from /public
-    const logo = await fetchAsDataURL('/CramerLogoText.png');
+    const M = 40;
+    const BLUE = [30, 80, 160];
+    const LIGHT_GRAY = [240, 240, 240];
 
-    // Header bar
-    doc.setFillColor(18, 126, 210);
-    doc.rect(0, 0, pageWidth, 28, 'F');
+    const fmtMoney = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 
-    // Logo
-    doc.addImage(logo, 'PNG', 10, 6, 55, 16);
+    const safeText = (val) => (val ? String(val) : '');
 
-    // Title / meta
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(16);
-    doc.text('ESTIMATE', pageWidth - 10, 12, { align: 'right' });
-
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-    doc.text(`Estimate #: ${estimate.estimate_number}`, pageWidth - 10, 18, { align: 'right' });
-    doc.text(`Date: ${new Date(estimate.estimate_date).toLocaleDateString()}`, pageWidth - 10, 24, { align: 'right' });
-
-    // Reset text
-    doc.setTextColor(20, 20, 20);
-
-    let y = 40;
-
-    // Customer block
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(11);
-    doc.text('Bill To', 10, y);
-    doc.text('Details', pageWidth / 2 + 5, y);
-
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(10);
-
-    const cust = estimate.customers || {};
-    const leftLines = [
-      cust.name || '',
-      cust.address || '',
-      cust.phone ? `Phone: ${cust.phone}` : '',
-      cust.email ? `Email: ${cust.email}` : ''
-    ].filter(Boolean);
-
-    const rightLines = [
-      estimate.tech_name ? `Technician: ${estimate.tech_name}` : '',
-      estimate.expiry_date ? `Expires: ${new Date(estimate.expiry_date).toLocaleDateString()}` : '',
-      estimate.status ? `Status: ${String(estimate.status).toUpperCase()}` : ''
-    ].filter(Boolean);
-
-    leftLines.forEach((line, i) => doc.text(line, 10, y + 8 + i * 5));
-    rightLines.forEach((line, i) => doc.text(line, pageWidth / 2 + 5, y + 8 + i * 5));
-
-    y += 35;
-
-    // Line items header
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(11);
-    doc.text('Line Items', 10, y);
-    y += 8;
-
-    doc.setFontSize(9);
-    doc.text('Description', 10, y);
-    doc.text('Material', 120, y, { align: 'right' });
-    doc.text('Labor', 150, y, { align: 'right' });
-    doc.text('Total', pageWidth - 10, y, { align: 'right' });
-
-    y += 2;
-    doc.setDrawColor(220);
-    doc.line(10, y, pageWidth - 10, y);
-    y += 6;
-
-    doc.setFont('helvetica', 'normal');
-
-    const money = (n) => `$${(Number(n || 0)).toFixed(2)}`;
-
-    for (const item of (items || [])) {
-      // page break
-      if (y > 250) {
-        doc.addPage();
-        y = 20;
-      }
-
-      const descLines = doc.splitTextToSize(item.description || '', 95);
-      descLines.forEach((line, i) => doc.text(line, 10, y + i * 5));
-
-      doc.text(money(item.material_cost), 120, y, { align: 'right' });
-      doc.text(money(item.labor_cost), 150, y, { align: 'right' });
-      doc.text(money(item.total_cost), pageWidth - 10, y, { align: 'right' });
-
-      y += Math.max(descLines.length * 5, 6) + 3;
+    // Try to load logo
+    let logoDataUrl = null;
+    try {
+      logoDataUrl = await fetchImageAsDataURL(LOGO_URL);
+    } catch (e) {
+      console.warn('Logo not loaded:', e);
     }
 
-    // Total
-    y += 2;
-    doc.line(10, y, pageWidth - 10, y);
-    y += 8;
+    // ===== Header =====
+    let y = M;
+
+    if (logoDataUrl) {
+      // Fit logo nicely in header
+      doc.addImage(logoDataUrl, 'PNG', M, y - 8, 210, 55);
+    } else {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(18);
+      doc.text(COMPANY.name, M, y + 20);
+    }
+
+    // Company info under logo
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    const companyInfoX = M;
+    const companyInfoY = y + 60;
+    doc.text(`Phone: ${COMPANY.phone}`, companyInfoX, companyInfoY);
+    doc.text(`Email: ${COMPANY.email}`, companyInfoX, companyInfoY + 12);
+    doc.text(`Website: ${COMPANY.website}`, companyInfoX, companyInfoY + 24);
+
+    // Right box: ESTIMATE
+    const rightBoxW = 220;
+    const rightBoxX = pageW - M - rightBoxW;
+    const rightBoxY = y;
+
+    // Title
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(16);
+    doc.text('ESTIMATE', rightBoxX + rightBoxW / 2, rightBoxY + 18, { align: 'center' });
+
+    // Blue bar + Estimate #
+    doc.setFillColor(...BLUE);
+    doc.rect(rightBoxX, rightBoxY + 26, rightBoxW, 18, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(10);
+    doc.text(`ESTIMATE #`, rightBoxX + 10, rightBoxY + 39);
+    doc.text(safeText(estimate.estimate_number), rightBoxX + rightBoxW - 10, rightBoxY + 39, { align: 'right' });
+
+    // Date row
+    doc.setTextColor(0, 0, 0);
+    doc.setFillColor(...LIGHT_GRAY);
+    doc.rect(rightBoxX, rightBoxY + 44, rightBoxW, 18, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('DATE', rightBoxX + 10, rightBoxY + 57);
+    doc.setFont('helvetica', 'normal');
+    doc.text(
+      new Date(estimate.estimate_date).toLocaleDateString(),
+      rightBoxX + rightBoxW - 10,
+      rightBoxY + 57,
+      { align: 'right' }
+    );
+
+    y = companyInfoY + 45;
+
+    // ===== Requested By / Customer ID row =====
+    const rowH = 30;
+    const leftW = (pageW - 2 * M) * 0.65;
+    const rightW2 = (pageW - 2 * M) - leftW;
+
+    // Row background header strip
+    doc.setFillColor(...LIGHT_GRAY);
+    doc.rect(M, y, pageW - 2 * M, rowH, 'F');
+    doc.setDrawColor(200);
+    doc.rect(M, y, pageW - 2 * M, rowH);
 
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(12);
-    doc.text('Total', 150, y, { align: 'right' });
-    doc.text(money(estimate.total_amount), pageWidth - 10, y, { align: 'right' });
+    doc.setFontSize(9);
+    doc.text('REQUESTED BY', M + 10, y + 12);
+    doc.text('CUSTOMER ID', M + leftW + 10, y + 12);
 
-    // Notes
-    if (estimate.notes) {
-      y += 12;
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(10);
-      doc.text('Notes / Terms', 10, y);
-      y += 6;
+    doc.setFont('helvetica', 'normal');
+    doc.text(safeText(estimate.customers?.name), M + 10, y + 25);
 
-      doc.setFont('helvetica', 'normal');
-      const wrapped = doc.splitTextToSize(estimate.notes, pageWidth - 20);
-      wrapped.forEach((line) => {
-        if (y > 260) { doc.addPage(); y = 20; }
-        doc.text(line, 10, y);
-        y += 5;
+    // customer id = short UUID chunk (if you want something there)
+    const custId = safeText(estimate.customer_id).slice(0, 8).toUpperCase();
+    doc.text(custId ? custId : '-', M + leftW + 10, y + 25);
+
+    y += rowH + 12;
+
+    // ===== Two column boxes: BILL TO + JOB DETAILS =====
+    const boxH = 110;
+    const gap = 12;
+    const boxW = (pageW - 2 * M - gap) / 2;
+
+    const billX = M;
+    const jobX = M + boxW + gap;
+
+    const headerH = 18;
+
+    // BILL TO box
+    doc.setDrawColor(180);
+    doc.rect(billX, y, boxW, boxH);
+    doc.setFillColor(...BLUE);
+    doc.rect(billX, y, boxW, headerH, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('BILL TO', billX + 10, y + 13);
+
+    doc.setTextColor(0, 0, 0);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+
+    let by = y + headerH + 16;
+    doc.text(safeText(estimate.customers?.name), billX + 10, by);
+    by += 12;
+
+    const addr = safeText(estimate.customers?.address);
+    if (addr) {
+      const addrLines = doc.splitTextToSize(addr, boxW - 20);
+      addrLines.forEach((line) => {
+        doc.text(line, billX + 10, by);
+        by += 12;
       });
     }
 
+    const custEmail = safeText(estimate.customers?.email);
+    const custPhone = safeText(estimate.customers?.phone);
+    if (custEmail) {
+      doc.text(custEmail, billX + 10, y + boxH - 28);
+    }
+    if (custPhone) {
+      doc.text(custPhone, billX + 10, y + boxH - 14);
+    }
+
+    // JOB DETAILS box
+    doc.rect(jobX, y, boxW, boxH);
+    doc.setFillColor(...BLUE);
+    doc.rect(jobX, y, boxW, headerH, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('JOB DETAILS', jobX + 10, y + 13);
+
+    doc.setTextColor(0, 0, 0);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+
+    const tech = safeText(estimate.tech_name);
+    doc.text(`Technician: ${tech || '-'}`, jobX + 10, y + headerH + 18);
+
+    const expires = estimate.expiry_date ? new Date(estimate.expiry_date).toLocaleDateString() : '';
+    doc.text(`Expires: ${expires || '-'}`, jobX + 10, y + headerH + 34);
+
+    // Small placeholder line like the sample form
+    doc.setFontSize(8);
+    doc.setTextColor(120, 120, 120);
+    doc.text('[Enter general description of work]', jobX + 10, y + headerH + 55);
+    doc.setTextColor(0, 0, 0);
+
+    y += boxH + 14;
+
+    // ===== Line items table =====
+    const tableX = M;
+    const tableW = pageW - 2 * M;
+
+    const col = {
+      qty: tableX + 10,
+      desc: tableX + 55,
+      taxed: tableX + tableW - 170,
+      unit: tableX + tableW - 115,
+      total: tableX + tableW - 55
+    };
+
+    // Header bar
+    doc.setFillColor(...BLUE);
+    doc.rect(tableX, y, tableW, 18, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.text('QTY', col.qty, y + 13);
+    doc.text('DESCRIPTION', col.desc, y + 13);
+    doc.text('TAXED', col.taxed, y + 13);
+    doc.text('UNIT PRICE', col.unit, y + 13, { align: 'right' });
+    doc.text('TOTAL', col.total, y + 13, { align: 'right' });
+
+    doc.setTextColor(0, 0, 0);
+
+    y += 24;
+
+    doc.setDrawColor(200);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+
+    const lineHeight = 14;
+
+    const ensureSpace = (needed) => {
+      if (y + needed > pageH - 140) {
+        doc.addPage();
+        y = M;
+      }
+    };
+
+    items.forEach((item) => {
+      ensureSpace(40);
+
+      const qty = 1;
+      const unitPrice = Number(item.total_cost) || 0;
+      const total = Number(item.total_cost) || 0;
+
+      const descLines = doc.splitTextToSize(safeText(item.description), (col.taxed - 10) - col.desc);
+      const rowH2 = Math.max(descLines.length * lineHeight, lineHeight) + 10;
+
+      // Row border
+      doc.rect(tableX, y - 10, tableW, rowH2);
+
+      doc.text(String(qty), col.qty, y);
+
+      descLines.forEach((line, i) => {
+        doc.text(line, col.desc, y + i * lineHeight);
+      });
+
+      // Taxed column (blank like sample)
+      doc.text('', col.taxed, y);
+
+      doc.text(fmtMoney(unitPrice), col.unit, y, { align: 'right' });
+      doc.text(fmtMoney(total), col.total, y, { align: 'right' });
+
+      y += rowH2;
+    });
+
+    // Totals box right
+    ensureSpace(120);
+
+    const subtotal = Number(estimate.total_amount) || 0;
+    const taxRate = 0;
+    const tax = subtotal * taxRate;
+    const grandTotal = subtotal + tax;
+
+    const totalsW = 200;
+    const totalsX = tableX + tableW - totalsW;
+    const totalsY = y + 10;
+
+    doc.setDrawColor(180);
+    doc.rect(totalsX, totalsY, totalsW, 90);
+
+    const tRow = (label, value, rowIndex, bold = false) => {
+      const yy = totalsY + 18 + rowIndex * 16;
+      doc.setFont('helvetica', bold ? 'bold' : 'normal');
+      doc.setFontSize(9);
+      doc.text(label, totalsX + 10, yy);
+      doc.text(value, totalsX + totalsW - 10, yy, { align: 'right' });
+    };
+
+    tRow('SUBTOTAL', fmtMoney(subtotal), 0);
+    tRow('TAX RATE', `${(taxRate * 100).toFixed(0)}%`, 1);
+    tRow('TAX', fmtMoney(tax), 2);
+
+    // Total bar
+    doc.setFillColor(...BLUE);
+    doc.rect(totalsX, totalsY + 58, totalsW, 22, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('TOTAL', totalsX + 10, totalsY + 73);
+    doc.text(fmtMoney(grandTotal), totalsX + totalsW - 10, totalsY + 73, { align: 'right' });
+    doc.setTextColor(0, 0, 0);
+
+    y = totalsY + 110;
+
+    // ===== Scope of Work =====
+    ensureSpace(120);
+
+    doc.setFillColor(...BLUE);
+    doc.rect(M, y, tableW, 18, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('SCOPE OF WORK', M + 10, y + 13);
+    doc.setTextColor(0, 0, 0);
+
+    y += 28;
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+
+    const scope = safeText(estimate.notes);
+    const scopeLines = doc.splitTextToSize(scope || '—', tableW - 20);
+    const scopeBoxH = Math.max(70, scopeLines.length * 12 + 20);
+
+    doc.setDrawColor(180);
+    doc.rect(M, y - 10, tableW, scopeBoxH);
+
+    let sy = y + 10;
+    scopeLines.forEach((line) => {
+      doc.text(line, M + 10, sy);
+      sy += 12;
+    });
+
+    y = y - 10 + scopeBoxH + 20;
+
+    // ===== Footer / signature =====
+    ensureSpace(120);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+
+    doc.text('Please reference this estimate number in all correspondence.', M, y);
+    y += 12;
+    doc.text(`Questions? ${COMPANY.phone} | ${COMPANY.email}`, M, y);
+    y += 24;
+
+    doc.setDrawColor(0);
+    doc.line(M, y, M + 260, y);
+    doc.text('Signature', M, y + 12);
+
+    doc.line(pageW - M - 180, y, pageW - M, y);
+    doc.text('Date', pageW - M - 180, y + 12);
+
+    // Save
     doc.save(`estimate-${estimate.estimate_number}.pdf`);
   } catch (error) {
     console.error('Error generating PDF:', error);
     alert('Failed to generate PDF');
   }
 };
+
 
   const resetForm = () => {
     setFormData({
@@ -527,14 +763,15 @@ const downloadPDF = async (estimateId) => {
             </div>
 
             <div className="form-group" style={{ marginTop: '24px' }}>
-              <label>Notes</label>
-              <textarea
-                name="notes"
-                value={formData.notes}
-                onChange={handleInputChange}
-                rows="3"
-                placeholder="Additional notes or terms..."
-              />
+       <label>Scope of Work</label>
+<textarea
+  name="notes"
+  value={formData.notes}
+  onChange={handleInputChange}
+  rows="3"
+  placeholder="Enter scope of work..."
+/>
+
             </div>
 
             <div style={{
