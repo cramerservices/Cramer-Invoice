@@ -232,6 +232,14 @@ function Invoices() {
 
       if (itemsErr) throw itemsErr;
 
+      const { data: payments, error: paymentsErr } = await supabase
+        .from('payments')
+        .select('*')
+        .eq('invoice_id', invoiceId)
+        .order('payment_date');
+
+      if (paymentsErr) throw paymentsErr;
+
       const doc = new jsPDF({ unit: 'pt', format: 'letter' });
       const pageW = doc.internal.pageSize.getWidth();
       const pageH = doc.internal.pageSize.getHeight();
@@ -444,14 +452,15 @@ function Invoices() {
         y += rowH2;
       });
 
-      ensureSpace(120);
+      ensureSpace(160);
 
       const totalsW = 200;
       const totalsX = tableX + tableW - totalsW;
       const totalsY = y + 10;
 
+      const totalBoxHeight = 88;
       doc.setDrawColor(180);
-      doc.rect(totalsX, totalsY, totalsW, 50);
+      doc.rect(totalsX, totalsY, totalsW, totalBoxHeight);
 
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(10);
@@ -463,8 +472,62 @@ function Invoices() {
       doc.text(fmtMoney(Number(invoice.total_amount) || 0), totalsX + totalsW - 10, totalsY + 15, { align: 'right' });
 
       doc.setTextColor(0, 0, 0);
+      doc.setFillColor(...LIGHT_GRAY);
+      doc.rect(totalsX, totalsY + 22, totalsW, 22, 'F');
+      doc.text('PAID', totalsX + 10, totalsY + 37);
+      doc.setFont('helvetica', 'normal');
+      doc.text(fmtMoney(Number(invoice.amount_paid) || 0), totalsX + totalsW - 10, totalsY + 37, { align: 'right' });
 
-      y = totalsY + 70;
+      doc.setFont('helvetica', 'bold');
+      doc.setFillColor(...BLUE);
+      doc.rect(totalsX, totalsY + 44, totalsW, 22, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.text('BALANCE DUE', totalsX + 10, totalsY + 59);
+      doc.text(fmtMoney(Number(invoice.amount_due) || 0), totalsX + totalsW - 10, totalsY + 59, { align: 'right' });
+
+      doc.setTextColor(0, 0, 0);
+
+      y = totalsY + totalBoxHeight + 20;
+
+      if (payments && payments.length > 0) {
+        ensureSpace(120);
+
+        doc.setFillColor(...BLUE);
+        doc.rect(M, y, tableW, 18, 'F');
+        doc.setTextColor(255, 255, 255);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(10);
+        doc.text('PAYMENT HISTORY', M + 10, y + 13);
+        doc.setTextColor(0, 0, 0);
+
+        y += 24;
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9);
+        doc.text('DATE', M + 10, y);
+        doc.text('AMOUNT', M + 120, y);
+        doc.text('METHOD', M + 200, y);
+        doc.text('REFERENCE', M + 300, y);
+
+        y += 6;
+        doc.setDrawColor(200);
+        doc.line(M, y, pageW - M, y);
+        y += 12;
+
+        doc.setFont('helvetica', 'normal');
+        payments.forEach((payment) => {
+          ensureSpace(30);
+
+          doc.text(new Date(payment.payment_date).toLocaleDateString(), M + 10, y);
+          doc.text(fmtMoney(Number(payment.amount)), M + 120, y);
+          doc.text(safeText(payment.payment_method).toUpperCase(), M + 200, y);
+          doc.text(safeText(payment.reference_number) || '-', M + 300, y);
+
+          y += 16;
+        });
+
+        y += 10;
+      }
 
       ensureSpace(120);
 
