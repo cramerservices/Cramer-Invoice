@@ -407,7 +407,7 @@ function Invoices() {
       doc.text('TOTAL', col.total, y + 11, { align: 'right' });
 
       doc.setTextColor(0, 0, 0);
-      y += 20;
+      y += 22;
 
       doc.setDrawColor(200);
       doc.setFont('helvetica', 'normal');
@@ -500,7 +500,7 @@ function Invoices() {
         doc.text('PAYMENT HISTORY', M + 10, y + 10);
         doc.setTextColor(0, 0, 0);
 
-        y += 18;
+        y += 22;
 
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(8);
