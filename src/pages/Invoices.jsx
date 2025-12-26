@@ -390,8 +390,8 @@ function Invoices() {
       const col = {
         qty: tableX + 10,
         desc: tableX + 55,
-        material: tableX + tableW - 170,
-        labor: tableX + tableW - 115,
+        material: tableX + tableW - 180,
+        labor: tableX + tableW - 120,
         total: tableX + tableW - 55
       };
 
@@ -433,7 +433,7 @@ function Invoices() {
 
         const descLines = doc.splitTextToSize(
           safeText(item.description),
-          (col.material - 10) - col.desc
+          (col.material - 15) - col.desc
         );
         const rowH2 = Math.max(descLines.length * lineHeight, lineHeight) + 10;
 
