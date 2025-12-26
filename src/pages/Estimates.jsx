@@ -248,7 +248,6 @@ const downloadPDF = async (estimateId) => {
     const LIGHT_GRAY = [240, 240, 240];
 
     const fmtMoney = (n) => `$${(Number(n) || 0).toFixed(2)}`;
-
     const safeText = (val) => (val ? String(val) : '');
 
     // Try to load logo
@@ -263,7 +262,6 @@ const downloadPDF = async (estimateId) => {
     let y = M;
 
     if (logoDataUrl) {
-      // Fit logo nicely in header
       doc.addImage(logoDataUrl, 'PNG', M, y - 8, 210, 55);
     } else {
       doc.setFont('helvetica', 'bold');
@@ -285,7 +283,6 @@ const downloadPDF = async (estimateId) => {
     const rightBoxX = pageW - M - rightBoxW;
     const rightBoxY = y;
 
-    // Title
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(16);
     doc.text('ESTIMATE', rightBoxX + rightBoxW / 2, rightBoxY + 18, { align: 'center' });
@@ -313,32 +310,10 @@ const downloadPDF = async (estimateId) => {
       { align: 'right' }
     );
 
+    // Move down below header area
     y = companyInfoY + 45;
 
-    // ===== Requested By / Customer ID row =====
-    const rowH = 30;
-    const leftW = (pageW - 2 * M) * 0.65;
-    const rightW2 = (pageW - 2 * M) - leftW;
-
-    // Row background header strip
-    doc.setFillColor(...LIGHT_GRAY);
-    doc.rect(M, y, pageW - 2 * M, rowH, 'F');
-    doc.setDrawColor(200);
-    doc.rect(M, y, pageW - 2 * M, rowH);
-
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9);
-    doc.text('REQUESTED BY', M + 10, y + 12);
-    doc.text('CUSTOMER ID', M + leftW + 10, y + 12);
-
-    doc.setFont('helvetica', 'normal');
-    doc.text(safeText(estimate.customers?.name), M + 10, y + 25);
-
-    // customer id = short UUID chunk (if you want something there)
-    const custId = safeText(estimate.customer_id).slice(0, 8).toUpperCase();
-    doc.text(custId ? custId : '-', M + leftW + 10, y + 25);
-
-    y += rowH + 12;
+    // ✅ REMOVED: "Requested By / Customer ID" section entirely
 
     // ===== Two column boxes: BILL TO + JOB DETAILS =====
     const boxH = 110;
@@ -347,7 +322,6 @@ const downloadPDF = async (estimateId) => {
 
     const billX = M;
     const jobX = M + boxW + gap;
-
     const headerH = 18;
 
     // BILL TO box
@@ -379,12 +353,8 @@ const downloadPDF = async (estimateId) => {
 
     const custEmail = safeText(estimate.customers?.email);
     const custPhone = safeText(estimate.customers?.phone);
-    if (custEmail) {
-      doc.text(custEmail, billX + 10, y + boxH - 28);
-    }
-    if (custPhone) {
-      doc.text(custPhone, billX + 10, y + boxH - 14);
-    }
+    if (custEmail) doc.text(custEmail, billX + 10, y + boxH - 28);
+    if (custPhone) doc.text(custPhone, billX + 10, y + boxH - 14);
 
     // JOB DETAILS box
     doc.rect(jobX, y, boxW, boxH);
@@ -405,7 +375,6 @@ const downloadPDF = async (estimateId) => {
     const expires = estimate.expiry_date ? new Date(estimate.expiry_date).toLocaleDateString() : '';
     doc.text(`Expires: ${expires || '-'}`, jobX + 10, y + headerH + 34);
 
-    // Small placeholder line like the sample form
     doc.setFontSize(8);
     doc.setTextColor(120, 120, 120);
     doc.text('[Enter general description of work]', jobX + 10, y + headerH + 55);
@@ -413,15 +382,15 @@ const downloadPDF = async (estimateId) => {
 
     y += boxH + 14;
 
-    // ===== Line items table =====
+    // ===== Line items table (Material + Labor + Total) =====
     const tableX = M;
     const tableW = pageW - 2 * M;
 
     const col = {
       qty: tableX + 10,
       desc: tableX + 55,
-      taxed: tableX + tableW - 170,
-      unit: tableX + tableW - 115,
+      material: tableX + tableW - 170,
+      labor: tableX + tableW - 115,
       total: tableX + tableW - 55
     };
 
@@ -433,12 +402,11 @@ const downloadPDF = async (estimateId) => {
     doc.setFontSize(9);
     doc.text('QTY', col.qty, y + 13);
     doc.text('DESCRIPTION', col.desc, y + 13);
-    doc.text('TAXED', col.taxed, y + 13);
-    doc.text('UNIT PRICE', col.unit, y + 13, { align: 'right' });
+    doc.text('MATERIAL', col.material, y + 13, { align: 'right' });
+    doc.text('LABOR', col.labor, y + 13, { align: 'right' });
     doc.text('TOTAL', col.total, y + 13, { align: 'right' });
 
     doc.setTextColor(0, 0, 0);
-
     y += 24;
 
     doc.setDrawColor(200);
@@ -455,13 +423,18 @@ const downloadPDF = async (estimateId) => {
     };
 
     items.forEach((item) => {
-      ensureSpace(40);
+      ensureSpace(50);
 
       const qty = 1;
-      const unitPrice = Number(item.total_cost) || 0;
-      const total = Number(item.total_cost) || 0;
 
-      const descLines = doc.splitTextToSize(safeText(item.description), (col.taxed - 10) - col.desc);
+      const material = Number(item.material_cost) || 0;
+      const labor = Number(item.labor_cost) || 0;
+      const total = Number(item.total_cost) || (material + labor);
+
+      const descLines = doc.splitTextToSize(
+        safeText(item.description),
+        (col.material - 10) - col.desc
+      );
       const rowH2 = Math.max(descLines.length * lineHeight, lineHeight) + 10;
 
       // Row border
@@ -473,53 +446,35 @@ const downloadPDF = async (estimateId) => {
         doc.text(line, col.desc, y + i * lineHeight);
       });
 
-      // Taxed column (blank like sample)
-      doc.text('', col.taxed, y);
-
-      doc.text(fmtMoney(unitPrice), col.unit, y, { align: 'right' });
+      doc.text(fmtMoney(material), col.material, y, { align: 'right' });
+      doc.text(fmtMoney(labor), col.labor, y, { align: 'right' });
       doc.text(fmtMoney(total), col.total, y, { align: 'right' });
 
       y += rowH2;
     });
 
-    // Totals box right
+    // ===== TOTAL ONLY (NO TAX SECTION) =====
     ensureSpace(120);
-
-    const subtotal = Number(estimate.total_amount) || 0;
-    const taxRate = 0;
-    const tax = subtotal * taxRate;
-    const grandTotal = subtotal + tax;
 
     const totalsW = 200;
     const totalsX = tableX + tableW - totalsW;
     const totalsY = y + 10;
 
     doc.setDrawColor(180);
-    doc.rect(totalsX, totalsY, totalsW, 90);
+    doc.rect(totalsX, totalsY, totalsW, 50);
 
-    const tRow = (label, value, rowIndex, bold = false) => {
-      const yy = totalsY + 18 + rowIndex * 16;
-      doc.setFont('helvetica', bold ? 'bold' : 'normal');
-      doc.setFontSize(9);
-      doc.text(label, totalsX + 10, yy);
-      doc.text(value, totalsX + totalsW - 10, yy, { align: 'right' });
-    };
-
-    tRow('SUBTOTAL', fmtMoney(subtotal), 0);
-    tRow('TAX RATE', `${(taxRate * 100).toFixed(0)}%`, 1);
-    tRow('TAX', fmtMoney(tax), 2);
-
-    // Total bar
-    doc.setFillColor(...BLUE);
-    doc.rect(totalsX, totalsY + 58, totalsW, 22, 'F');
-    doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(10);
-    doc.text('TOTAL', totalsX + 10, totalsY + 73);
-    doc.text(fmtMoney(grandTotal), totalsX + totalsW - 10, totalsY + 73, { align: 'right' });
+
+    doc.setFillColor(...BLUE);
+    doc.rect(totalsX, totalsY, totalsW, 22, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.text('TOTAL', totalsX + 10, totalsY + 15);
+    doc.text(fmtMoney(Number(estimate.total_amount) || 0), totalsX + totalsW - 10, totalsY + 15, { align: 'right' });
+
     doc.setTextColor(0, 0, 0);
 
-    y = totalsY + 110;
+    y = totalsY + 70;
 
     // ===== Scope of Work =====
     ensureSpace(120);
@@ -570,13 +525,13 @@ const downloadPDF = async (estimateId) => {
     doc.line(pageW - M - 180, y, pageW - M, y);
     doc.text('Date', pageW - M - 180, y + 12);
 
-    // Save
     doc.save(`estimate-${estimate.estimate_number}.pdf`);
   } catch (error) {
     console.error('Error generating PDF:', error);
     alert('Failed to generate PDF');
   }
 };
+
 
 
   const resetForm = () => {
