@@ -56,21 +56,25 @@ function Invoices() {
 
   const generateInvoiceNumber = async () => {
     try {
-      const { data, error } = await supabase
-        .from('crm_invoices')
-        .select('invoice_number')
-        .order('created_at', { ascending: false })
-        .limit(1);
+      // Generate a random invoice number and check if it already exists
+      let newNumber = '';
+      let isUnique = false;
 
-      if (error) throw error;
+      while (!isUnique) {
+        const randomNum = Math.floor(Math.random() * 9000) + 1000; // Random 4-digit number (1000-9999)
+        newNumber = `INV-${randomNum}`;
 
-      let newNumber = 'INV-0001';
-      if (data && data.length > 0) {
-        const lastNumber = data[0].invoice_number;
-        const match = lastNumber.match(/INV-(\d+)/);
-        if (match) {
-          const nextNum = parseInt(match[1]) + 1;
-          newNumber = `INV-${String(nextNum).padStart(4, '0')}`;
+        const { data, error } = await supabase
+          .from('crm_invoices')
+          .select('invoice_number')
+          .eq('invoice_number', newNumber)
+          .limit(1);
+
+        if (error) throw error;
+
+        // If no existing invoice with this number, it's unique
+        if (!data || data.length === 0) {
+          isUnique = true;
         }
       }
 
