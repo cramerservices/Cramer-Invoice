@@ -141,7 +141,37 @@ function Estimates() {
     return lineItems.reduce((sum, item) => sum + calculateLineTotal(item), 0);
   };
 
-  const handleSubmit = async (e) => {
+  
+  // --- Sync to customer dashboard (services_completed) ---
+  const upsertServiceCompletedForEstimate = async (estimateRow, totalAmount) => {
+    // Assumption: estimates.customer_id matches the portal customer's auth uid used by the dashboard.
+    const payload = {
+      kind: 'estimate',
+      estimate_id: estimateRow.id,
+      estimate_number: estimateRow.estimate_number,
+      status: estimateRow.status,
+      total_amount: totalAmount,
+      approved: null
+    };
+
+    const summary = `Estimate ${estimateRow.estimate_number} created for $${Number(totalAmount).toFixed(2)}`;
+
+    const { error } = await supabase
+      .from('services_completed')
+      .insert({
+        customer_id: estimateRow.customer_id,
+        service_type: 'estimate',
+        service_date: estimateRow.estimate_date,
+        technician_name: estimateRow.tech_name,
+        summary,
+        payload,
+        completed_at: new Date().toISOString()
+      });
+
+    if (error) throw error;
+  };
+
+const handleSubmit = async (e) => {
     e.preventDefault();
 
     try {
@@ -178,6 +208,9 @@ function Estimates() {
         .insert(lineItemsToInsert);
 
       if (lineItemsError) throw lineItemsError;
+
+      // Create a dashboard entry immediately
+      await upsertServiceCompletedForEstimate(estimate, totalAmount);
 
       setShowForm(false);
       resetForm();
