@@ -49,7 +49,60 @@ function Payments() {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  const handleSubmit = async (e) => {
+  
+  // --- Sync payment to the matching invoice entry in services_completed ---
+  const updateServicesCompletedForPayment = async ({ invoiceId, customerId, payment }) => {
+    // Find the services_completed row for this invoice
+    const { data: existing, error: findErr } = await supabase
+      .from('services_completed')
+      .select('id, payload')
+      .eq('customer_id', customerId)
+      .eq('service_type', 'invoice')
+      .contains('payload', { invoice_id: invoiceId })
+      .limit(1)
+      .maybeSingle();
+
+    if (findErr) throw findErr;
+    if (!existing) return; // If no dashboard row exists yet, do nothing.
+
+    const payload = existing.payload || {};
+    const payments = Array.isArray(payload.payments) ? payload.payments : [];
+    payments.push({
+      id: payment.id,
+      payment_date: payment.payment_date,
+      amount: payment.amount,
+      payment_method: payment.payment_method,
+      reference_number: payment.reference_number || null,
+      notes: payment.notes || null
+    });
+
+    const amount_paid = Number(payload.amount_paid || 0) + Number(payment.amount || 0);
+    const total_amount = Number(payload.total_amount || 0);
+    const amount_due = Math.max(0, total_amount - amount_paid);
+    const status = amount_due <= 0 ? 'paid' : 'partial';
+
+    const newPayload = {
+      ...payload,
+      amount_paid,
+      amount_due,
+      status,
+      payments
+    };
+
+    const summary = `Invoice ${payload.invoice_number || ''} ${status}. Amount due: $${amount_due.toFixed(2)}`;
+
+    const { error: updErr } = await supabase
+      .from('services_completed')
+      .update({
+        summary,
+        payload: newPayload
+      })
+      .eq('id', existing.id);
+
+    if (updErr) throw updErr;
+  };
+
+const handleSubmit = async (e) => {
     e.preventDefault();
 
     try {
@@ -72,7 +125,7 @@ function Payments() {
 
       const { data: invoice } = await supabase
         .from('crm_invoices')
-        .select('amount_paid, amount_due, total_amount')
+        .select('customer_id, invoice_number, amount_paid, amount_due, total_amount')
         .eq('id', formData.invoiceId)
         .single();
 
@@ -89,6 +142,9 @@ function Payments() {
           updated_at: new Date().toISOString()
         })
         .eq('id', formData.invoiceId);
+
+      // Update the matching dashboard invoice entry (adds this payment + updates amount due)
+      await updateServicesCompletedForPayment({ invoiceId: formData.invoiceId, customerId: invoice.customer_id, payment });
 
       setShowForm(false);
       resetForm();
@@ -119,7 +175,7 @@ function Payments() {
 
       const { data: invoice } = await supabase
         .from('crm_invoices')
-        .select('amount_paid, amount_due, total_amount')
+        .select('customer_id, invoice_number, amount_paid, amount_due, total_amount')
         .eq('id', payment.invoice_id)
         .single();
 
