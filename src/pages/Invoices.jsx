@@ -135,7 +135,40 @@ function Invoices() {
     return lineItems.reduce((sum, item) => sum + calculateLineTotal(item), 0);
   };
 
-  const handleSubmit = async (e) => {
+  
+  // --- Sync to customer dashboard (services_completed) ---
+  const upsertServiceCompletedForInvoice = async (invoiceRow, totalAmount) => {
+    // Assumption: crm_invoices.customer_id matches the portal customer's auth uid used by the dashboard.
+    const payload = {
+      kind: 'invoice',
+      invoice_id: invoiceRow.id,
+      invoice_number: invoiceRow.invoice_number,
+      status: invoiceRow.status,
+      total_amount: totalAmount,
+      amount_paid: 0,
+      amount_due: totalAmount,
+      approved: null,
+      payments: []
+    };
+
+    const summary = `Invoice ${invoiceRow.invoice_number} created. Amount due: $${Number(totalAmount).toFixed(2)}`;
+
+    const { error } = await supabase
+      .from('services_completed')
+      .insert({
+        customer_id: invoiceRow.customer_id,
+        service_type: 'invoice',
+        service_date: invoiceRow.invoice_date,
+        technician_name: invoiceRow.tech_name,
+        summary,
+        payload,
+        completed_at: new Date().toISOString()
+      });
+
+    if (error) throw error;
+  };
+
+const handleSubmit = async (e) => {
     e.preventDefault();
 
     try {
@@ -175,6 +208,9 @@ function Invoices() {
         .insert(lineItemsToInsert);
 
       if (lineItemsError) throw lineItemsError;
+
+      // Create a dashboard entry immediately
+      await upsertServiceCompletedForInvoice(invoice, totalAmount);
 
       setShowForm(false);
       resetForm();
