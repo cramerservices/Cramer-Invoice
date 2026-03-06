@@ -25,17 +25,16 @@ async function fetchImageAsDataURL(url) {
   });
 }
 
-function Invoices() {
-  const [invoices, setInvoices] = useState([]);
+function Estimates() {
+  const [estimates, setEstimates] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [loading, setLoading] = useState(true);
   const [formData, setFormData] = useState({
-    invoiceNumber: '',
+    estimateNumber: '',
     customerId: '',
-    invoiceDate: new Date().toISOString().split('T')[0],
-    dueDate: '',
-    workCompletedDate: '',
+    estimateDate: new Date().toISOString().split('T')[0],
+    expiryDate: '',
     techName: '',
     notes: '',
     status: 'draft'
@@ -50,45 +49,41 @@ function Invoices() {
 
   useEffect(() => {
     if (showForm) {
-      generateInvoiceNumber();
+      generateEstimateNumber();
     }
   }, [showForm]);
 
-  const generateInvoiceNumber = async () => {
+  const generateEstimateNumber = async () => {
     try {
-      // Generate a random invoice number and check if it already exists
-      let newNumber = '';
-      let isUnique = false;
+      const { data, error } = await supabase
+        .from('estimates')
+        .select('estimate_number')
+        .order('created_at', { ascending: false })
+        .limit(1);
 
-      while (!isUnique) {
-        const randomNum = Math.floor(Math.random() * 9000) + 1000; // Random 4-digit number (1000-9999)
-        newNumber = `INV-${randomNum}`;
+      if (error) throw error;
 
-        const { data, error } = await supabase
-          .from('crm_invoices')
-          .select('invoice_number')
-          .eq('invoice_number', newNumber)
-          .limit(1);
-
-        if (error) throw error;
-
-        // If no existing invoice with this number, it's unique
-        if (!data || data.length === 0) {
-          isUnique = true;
+      let newNumber = 'EST-0001';
+      if (data && data.length > 0) {
+        const lastNumber = data[0].estimate_number;
+        const match = lastNumber?.match(/EST-(\d+)/);
+        if (match) {
+          const nextNum = parseInt(match[1], 10) + 1;
+          newNumber = `EST-${String(nextNum).padStart(4, '0')}`;
         }
       }
 
-      setFormData(prev => ({ ...prev, invoiceNumber: newNumber }));
+      setFormData(prev => ({ ...prev, estimateNumber: newNumber }));
     } catch (error) {
-      console.error('Error generating invoice number:', error);
+      console.error('Error generating estimate number:', error);
     }
   };
 
   const fetchData = async () => {
     try {
-      const [invoicesRes, customersRes] = await Promise.all([
+      const [estimatesRes, customersRes] = await Promise.all([
         supabase
-          .from('crm_invoices')
+          .from('estimates')
           .select('*, customers(name)')
           .order('created_at', { ascending: false }),
         supabase
@@ -97,7 +92,10 @@ function Invoices() {
           .order('name')
       ]);
 
-      setInvoices(invoicesRes.data || []);
+      if (estimatesRes.error) throw estimatesRes.error;
+      if (customersRes.error) throw customersRes.error;
+
+      setEstimates(estimatesRes.data || []);
       setCustomers(customersRes.data || []);
     } catch (error) {
       console.error('Error fetching data:', error);
@@ -135,19 +133,74 @@ function Invoices() {
     return lineItems.reduce((sum, item) => sum + calculateLineTotal(item), 0);
   };
 
-  
-  // --- Sync to customer dashboard (services_completed) ---
+  const addDays = (dateString, days) => {
+    const date = new Date(dateString);
+    date.setDate(date.getDate() + days);
+    return date.toISOString().split('T')[0];
+  };
+
+  const generateUniqueInvoiceNumber = async () => {
+    let isUnique = false;
+    let newNumber = '';
+
+    while (!isUnique) {
+      const randomNum = Math.floor(Math.random() * 900000) + 100000;
+      newNumber = `INV-${randomNum}`;
+
+      const { data, error } = await supabase
+        .from('crm_invoices')
+        .select('id')
+        .eq('invoice_number', newNumber)
+        .limit(1);
+
+      if (error) throw error;
+
+      if (!data || data.length === 0) {
+        isUnique = true;
+      }
+    }
+
+    return newNumber;
+  };
+
+  const upsertServiceCompletedForEstimate = async (estimateRow, totalAmount) => {
+    const payload = {
+      kind: 'estimate',
+      estimate_id: estimateRow.id,
+      estimate_number: estimateRow.estimate_number,
+      status: estimateRow.status,
+      total_amount: totalAmount,
+      approved: estimateRow.status === 'approved'
+    };
+
+    const summary = `Estimate ${estimateRow.estimate_number} created for $${Number(totalAmount).toFixed(2)}`;
+
+    const { error } = await supabase
+      .from('services_completed')
+      .insert({
+        customer_id: estimateRow.customer_id,
+        service_type: 'estimate',
+        service_date: estimateRow.estimate_date,
+        technician_name: estimateRow.tech_name,
+        summary,
+        payload,
+        completed_at: new Date().toISOString()
+      });
+
+    if (error) throw error;
+  };
+
   const upsertServiceCompletedForInvoice = async (invoiceRow, totalAmount) => {
-    // Assumption: crm_invoices.customer_id matches the portal customer's auth uid used by the dashboard.
     const payload = {
       kind: 'invoice',
       invoice_id: invoiceRow.id,
       invoice_number: invoiceRow.invoice_number,
+      estimate_id: invoiceRow.estimate_id || null,
       status: invoiceRow.status,
       total_amount: totalAmount,
-      amount_paid: 0,
-      amount_due: totalAmount,
-      approved: null,
+      amount_paid: Number(invoiceRow.amount_paid || 0),
+      amount_due: Number(invoiceRow.amount_due || totalAmount),
+      approved: true,
       payments: []
     };
 
@@ -168,34 +221,112 @@ function Invoices() {
     if (error) throw error;
   };
 
-const handleSubmit = async (e) => {
+  const createInvoiceFromEstimate = async (estimateId) => {
+    const { data: existingInvoice, error: existingInvoiceError } = await supabase
+      .from('crm_invoices')
+      .select('id, invoice_number')
+      .eq('estimate_id', estimateId)
+      .maybeSingle();
+
+    if (existingInvoiceError) throw existingInvoiceError;
+
+    if (existingInvoice) {
+      return existingInvoice;
+    }
+
+    const { data: estimate, error: estimateError } = await supabase
+      .from('estimates')
+      .select('*')
+      .eq('id', estimateId)
+      .single();
+
+    if (estimateError) throw estimateError;
+
+    const { data: estimateItems, error: estimateItemsError } = await supabase
+      .from('estimate_line_items')
+      .select('*')
+      .eq('estimate_id', estimateId)
+      .order('sort_order', { ascending: true });
+
+    if (estimateItemsError) throw estimateItemsError;
+
+    const invoiceNumber = await generateUniqueInvoiceNumber();
+
+    const today = new Date().toISOString().split('T')[0];
+    const dueDate = addDays(today, 7);
+
+    const totalAmount = Number(estimate.total_amount || 0);
+
+    const invoiceInsert = {
+      invoice_number: invoiceNumber,
+      customer_id: estimate.customer_id,
+      estimate_id: estimate.id,
+      invoice_date: today,
+      due_date: dueDate,
+      work_completed_date: today,
+      tech_name: estimate.tech_name || '',
+      notes: estimate.notes || '',
+      status: 'draft',
+      total_amount: totalAmount,
+      amount_paid: 0,
+      amount_due: totalAmount
+    };
+
+    const { data: invoice, error: invoiceError } = await supabase
+      .from('crm_invoices')
+      .insert(invoiceInsert)
+      .select()
+      .single();
+
+    if (invoiceError) throw invoiceError;
+
+    if (estimateItems && estimateItems.length > 0) {
+      const invoiceLineItems = estimateItems.map((item, index) => ({
+        invoice_id: invoice.id,
+        description: item.description || '',
+        material_cost: Number(item.material_cost || 0),
+        labor_cost: Number(item.labor_cost || 0),
+        total_cost: Number(item.total_cost || 0),
+        sort_order: item.sort_order ?? index
+      }));
+
+      const { error: invoiceLineItemsError } = await supabase
+        .from('crm_invoice_line_items')
+        .insert(invoiceLineItems);
+
+      if (invoiceLineItemsError) throw invoiceLineItemsError;
+    }
+
+    await upsertServiceCompletedForInvoice(invoice, totalAmount);
+
+    return invoice;
+  };
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
 
     try {
       const totalAmount = calculateGrandTotal();
 
-      const { data: invoice, error: invoiceError } = await supabase
-        .from('crm_invoices')
+      const { data: estimate, error: estimateError } = await supabase
+        .from('estimates')
         .insert({
-          invoice_number: formData.invoiceNumber,
+          estimate_number: formData.estimateNumber,
           customer_id: formData.customerId,
-          invoice_date: formData.invoiceDate,
-          due_date: formData.dueDate,
-          work_completed_date: formData.workCompletedDate,
+          estimate_date: formData.estimateDate,
+          expiry_date: formData.expiryDate || null,
           tech_name: formData.techName,
           notes: formData.notes,
           status: formData.status,
-          total_amount: totalAmount,
-          amount_paid: 0,
-          amount_due: totalAmount
+          total_amount: totalAmount
         })
         .select()
         .single();
 
-      if (invoiceError) throw invoiceError;
+      if (estimateError) throw estimateError;
 
       const lineItemsToInsert = lineItems.map((item, index) => ({
-        invoice_id: invoice.id,
+        estimate_id: estimate.id,
         description: item.description,
         material_cost: parseFloat(item.materialCost) || 0,
         labor_cost: parseFloat(item.laborCost) || 0,
@@ -204,81 +335,97 @@ const handleSubmit = async (e) => {
       }));
 
       const { error: lineItemsError } = await supabase
-        .from('crm_invoice_line_items')
+        .from('estimate_line_items')
         .insert(lineItemsToInsert);
 
       if (lineItemsError) throw lineItemsError;
 
-      // Create a dashboard entry immediately
-      await upsertServiceCompletedForInvoice(invoice, totalAmount);
+      await upsertServiceCompletedForEstimate(estimate, totalAmount);
+
+      if (estimate.status === 'approved') {
+        await createInvoiceFromEstimate(estimate.id);
+      }
 
       setShowForm(false);
       resetForm();
-      fetchData();
-      alert('Invoice created successfully!');
+      await fetchData();
+      alert('Estimate created successfully!');
     } catch (error) {
-      console.error('Error saving invoice:', error);
-      alert('Failed to create invoice');
+      console.error('Error saving estimate:', error);
+      alert('Failed to create estimate');
     }
   };
 
   const handleDelete = async (id) => {
-    if (!confirm('Are you sure you want to delete this invoice?')) return;
+    if (!window.confirm('Are you sure you want to delete this estimate?')) return;
 
     try {
       const { error } = await supabase
-        .from('crm_invoices')
+        .from('estimates')
         .delete()
         .eq('id', id);
 
       if (error) throw error;
-      fetchData();
+      await fetchData();
     } catch (error) {
-      console.error('Error deleting invoice:', error);
-      alert('Failed to delete invoice');
+      console.error('Error deleting estimate:', error);
+      alert('Failed to delete estimate');
     }
   };
 
   const handleStatusChange = async (id, newStatus) => {
     try {
-      const { error } = await supabase
-        .from('crm_invoices')
-        .update({ status: newStatus, updated_at: new Date().toISOString() })
+      const { data: currentEstimate, error: currentEstimateError } = await supabase
+        .from('estimates')
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      if (currentEstimateError) throw currentEstimateError;
+
+      const oldStatus = currentEstimate.status;
+
+      const { error: updateError } = await supabase
+        .from('estimates')
+        .update({
+          status: newStatus,
+          updated_at: new Date().toISOString()
+        })
         .eq('id', id);
 
-      if (error) throw error;
-      fetchData();
+      if (updateError) throw updateError;
+
+      const shouldCreateInvoice =
+        newStatus === 'approved' && oldStatus !== 'approved';
+
+      if (shouldCreateInvoice) {
+        await createInvoiceFromEstimate(id);
+      }
+
+      await fetchData();
     } catch (error) {
       console.error('Error updating status:', error);
       alert('Failed to update status');
     }
   };
 
-  const downloadPDF = async (invoiceId) => {
+  const downloadPDF = async (estimateId) => {
     try {
-      const { data: invoice, error: invErr } = await supabase
-        .from('crm_invoices')
+      const { data: estimate, error: estErr } = await supabase
+        .from('estimates')
         .select('*, customers(*)')
-        .eq('id', invoiceId)
+        .eq('id', estimateId)
         .single();
 
-      if (invErr) throw invErr;
+      if (estErr) throw estErr;
 
       const { data: items, error: itemsErr } = await supabase
-        .from('crm_invoice_line_items')
+        .from('estimate_line_items')
         .select('*')
-        .eq('invoice_id', invoiceId)
+        .eq('estimate_id', estimateId)
         .order('sort_order');
 
       if (itemsErr) throw itemsErr;
-
-      const { data: payments, error: paymentsErr } = await supabase
-        .from('payments')
-        .select('*')
-        .eq('invoice_id', invoiceId)
-        .order('payment_date');
-
-      if (paymentsErr) throw paymentsErr;
 
       const doc = new jsPDF({ unit: 'pt', format: 'letter' });
       const pageW = doc.internal.pageSize.getWidth();
@@ -301,7 +448,7 @@ const handleSubmit = async (e) => {
       let y = M;
 
       if (logoDataUrl) {
-        doc.addImage(logoDataUrl, 'PNG', M, y - 8, 180, 47);
+        doc.addImage(logoDataUrl, 'PNG', M, y - 8, 210, 55);
       } else {
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(18);
@@ -309,12 +456,12 @@ const handleSubmit = async (e) => {
       }
 
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(8);
+      doc.setFontSize(9);
       const companyInfoX = M;
-      const companyInfoY = y + 50;
+      const companyInfoY = y + 60;
       doc.text(`Phone: ${COMPANY.phone}`, companyInfoX, companyInfoY);
-      doc.text(`Email: ${COMPANY.email}`, companyInfoX, companyInfoY + 10);
-      doc.text(`Website: ${COMPANY.website}`, companyInfoX, companyInfoY + 20);
+      doc.text(`Email: ${COMPANY.email}`, companyInfoX, companyInfoY + 12);
+      doc.text(`Website: ${COMPANY.website}`, companyInfoX, companyInfoY + 24);
 
       const rightBoxW = 220;
       const rightBoxX = pageW - M - rightBoxW;
@@ -322,14 +469,14 @@ const handleSubmit = async (e) => {
 
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(16);
-      doc.text('INVOICE', rightBoxX + rightBoxW / 2, rightBoxY + 18, { align: 'center' });
+      doc.text('ESTIMATE', rightBoxX + rightBoxW / 2, rightBoxY + 18, { align: 'center' });
 
       doc.setFillColor(...BLUE);
       doc.rect(rightBoxX, rightBoxY + 26, rightBoxW, 18, 'F');
       doc.setTextColor(255, 255, 255);
       doc.setFontSize(10);
-      doc.text(`INVOICE #`, rightBoxX + 10, rightBoxY + 39);
-      doc.text(safeText(invoice.invoice_number), rightBoxX + rightBoxW - 10, rightBoxY + 39, { align: 'right' });
+      doc.text(`ESTIMATE #`, rightBoxX + 10, rightBoxY + 39);
+      doc.text(safeText(estimate.estimate_number), rightBoxX + rightBoxW - 10, rightBoxY + 39, { align: 'right' });
 
       doc.setTextColor(0, 0, 0);
       doc.setFillColor(...LIGHT_GRAY);
@@ -339,26 +486,13 @@ const handleSubmit = async (e) => {
       doc.text('DATE', rightBoxX + 10, rightBoxY + 57);
       doc.setFont('helvetica', 'normal');
       doc.text(
-        new Date(invoice.invoice_date).toLocaleDateString(),
+        new Date(estimate.estimate_date).toLocaleDateString(),
         rightBoxX + rightBoxW - 10,
         rightBoxY + 57,
         { align: 'right' }
       );
 
-      doc.setFillColor(...BLUE);
-      doc.rect(rightBoxX, rightBoxY + 62, rightBoxW, 18, 'F');
-      doc.setTextColor(255, 255, 255);
-      doc.setFont('helvetica', 'bold');
-      doc.text('DUE DATE', rightBoxX + 10, rightBoxY + 75);
-      doc.setFont('helvetica', 'normal');
-      doc.text(
-        invoice.due_date ? new Date(invoice.due_date).toLocaleDateString() : '-',
-        rightBoxX + rightBoxW - 10,
-        rightBoxY + 75,
-        { align: 'right' }
-      );
-
-      y = companyInfoY + 35;
+      y = companyInfoY + 45;
 
       const boxH = 110;
       const gap = 12;
@@ -382,10 +516,10 @@ const handleSubmit = async (e) => {
       doc.setFontSize(9);
 
       let by = y + headerH + 16;
-      doc.text(safeText(invoice.customers?.name), billX + 10, by);
+      doc.text(safeText(estimate.customers?.name), billX + 10, by);
       by += 12;
 
-      const addr = safeText(invoice.customers?.address);
+      const addr = safeText(estimate.customers?.address);
       if (addr) {
         const addrLines = doc.splitTextToSize(addr, boxW - 20);
         addrLines.forEach((line) => {
@@ -394,8 +528,8 @@ const handleSubmit = async (e) => {
         });
       }
 
-      const custEmail = safeText(invoice.customers?.email);
-      const custPhone = safeText(invoice.customers?.phone);
+      const custEmail = safeText(estimate.customers?.email);
+      const custPhone = safeText(estimate.customers?.phone);
       if (custEmail) doc.text(custEmail, billX + 10, y + boxH - 28);
       if (custPhone) doc.text(custPhone, billX + 10, y + boxH - 14);
 
@@ -411,18 +545,18 @@ const handleSubmit = async (e) => {
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(9);
 
-      const tech = safeText(invoice.tech_name);
+      const tech = safeText(estimate.tech_name);
       doc.text(`Technician: ${tech || '-'}`, jobX + 10, y + headerH + 18);
 
-      const workDate = invoice.work_completed_date ? new Date(invoice.work_completed_date).toLocaleDateString() : '';
-      doc.text(`Work Completed: ${workDate || '-'}`, jobX + 10, y + headerH + 34);
+      const expires = estimate.expiry_date ? new Date(estimate.expiry_date).toLocaleDateString() : '';
+      doc.text(`Expires: ${expires || '-'}`, jobX + 10, y + headerH + 34);
 
       doc.setFontSize(8);
       doc.setTextColor(120, 120, 120);
-      doc.text('[Work completed description]', jobX + 10, y + headerH + 55);
+      doc.text('[Enter general description of work]', jobX + 10, y + headerH + 55);
       doc.setTextColor(0, 0, 0);
 
-      y += boxH + 10;
+      y += boxH + 14;
 
       const tableX = M;
       const tableW = pageW - 2 * M;
@@ -430,30 +564,30 @@ const handleSubmit = async (e) => {
       const col = {
         qty: tableX + 10,
         desc: tableX + 55,
-        material: tableX + tableW - 180,
-        labor: tableX + tableW - 120,
+        material: tableX + tableW - 170,
+        labor: tableX + tableW - 115,
         total: tableX + tableW - 55
       };
 
       doc.setFillColor(...BLUE);
-      doc.rect(tableX, y, tableW, 16, 'F');
+      doc.rect(tableX, y, tableW, 18, 'F');
       doc.setTextColor(255, 255, 255);
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(8);
-      doc.text('QTY', col.qty, y + 11);
-      doc.text('DESCRIPTION', col.desc, y + 11);
-      doc.text('MATERIAL', col.material, y + 11, { align: 'right' });
-      doc.text('LABOR', col.labor, y + 11, { align: 'right' });
-      doc.text('TOTAL', col.total, y + 11, { align: 'right' });
+      doc.setFontSize(9);
+      doc.text('QTY', col.qty, y + 13);
+      doc.text('DESCRIPTION', col.desc, y + 13);
+      doc.text('MATERIAL', col.material, y + 13, { align: 'right' });
+      doc.text('LABOR', col.labor, y + 13, { align: 'right' });
+      doc.text('TOTAL', col.total, y + 13, { align: 'right' });
 
       doc.setTextColor(0, 0, 0);
-      y += 22;
+      y += 24;
 
       doc.setDrawColor(200);
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(8);
+      doc.setFontSize(9);
 
-      const lineHeight = 12;
+      const lineHeight = 14;
 
       const ensureSpace = (needed) => {
         if (y + needed > pageH - 140) {
@@ -466,14 +600,13 @@ const handleSubmit = async (e) => {
         ensureSpace(50);
 
         const qty = 1;
-
         const material = Number(item.material_cost) || 0;
         const labor = Number(item.labor_cost) || 0;
         const total = Number(item.total_cost) || (material + labor);
 
         const descLines = doc.splitTextToSize(
           safeText(item.description),
-          (col.material - 15) - col.desc
+          (col.material - 10) - col.desc
         );
         const rowH2 = Math.max(descLines.length * lineHeight, lineHeight) + 10;
 
@@ -492,120 +625,65 @@ const handleSubmit = async (e) => {
         y += rowH2;
       });
 
-      ensureSpace(140);
+      ensureSpace(120);
 
       const totalsW = 200;
       const totalsX = tableX + tableW - totalsW;
-      const totalsY = y + 8;
+      const totalsY = y + 10;
 
-      const totalBoxHeight = 72;
       doc.setDrawColor(180);
-      doc.rect(totalsX, totalsY, totalsW, totalBoxHeight);
+      doc.rect(totalsX, totalsY, totalsW, 50);
 
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(9);
+      doc.setFontSize(10);
 
       doc.setFillColor(...BLUE);
-      doc.rect(totalsX, totalsY, totalsW, 18, 'F');
+      doc.rect(totalsX, totalsY, totalsW, 22, 'F');
       doc.setTextColor(255, 255, 255);
-      doc.text('TOTAL', totalsX + 10, totalsY + 12);
-      doc.text(fmtMoney(Number(invoice.total_amount) || 0), totalsX + totalsW - 10, totalsY + 12, { align: 'right' });
-
-      doc.setTextColor(0, 0, 0);
-      doc.setFillColor(...LIGHT_GRAY);
-      doc.rect(totalsX, totalsY + 18, totalsW, 18, 'F');
-      doc.text('PAID', totalsX + 10, totalsY + 30);
-      doc.setFont('helvetica', 'normal');
-      doc.text(fmtMoney(Number(invoice.amount_paid) || 0), totalsX + totalsW - 10, totalsY + 30, { align: 'right' });
-
-      doc.setFont('helvetica', 'bold');
-      doc.setFillColor(...BLUE);
-      doc.rect(totalsX, totalsY + 36, totalsW, 18, 'F');
-      doc.setTextColor(255, 255, 255);
-      doc.text('BALANCE DUE', totalsX + 10, totalsY + 48);
-      doc.text(fmtMoney(Number(invoice.amount_due) || 0), totalsX + totalsW - 10, totalsY + 48, { align: 'right' });
+      doc.text('TOTAL', totalsX + 10, totalsY + 15);
+      doc.text(fmtMoney(Number(estimate.total_amount) || 0), totalsX + totalsW - 10, totalsY + 15, { align: 'right' });
 
       doc.setTextColor(0, 0, 0);
 
-      y = totalsY + totalBoxHeight + 12;
+      y = totalsY + 70;
 
-      if (payments && payments.length > 0) {
-        ensureSpace(100);
-
-        doc.setFillColor(...BLUE);
-        doc.rect(M, y, tableW, 14, 'F');
-        doc.setTextColor(255, 255, 255);
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(9);
-        doc.text('PAYMENT HISTORY', M + 10, y + 10);
-        doc.setTextColor(0, 0, 0);
-
-        y += 22;
-
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(8);
-        doc.text('DATE', M + 10, y);
-        doc.text('AMOUNT', M + 120, y);
-        doc.text('METHOD', M + 200, y);
-        doc.text('REFERENCE', M + 300, y);
-
-        y += 5;
-        doc.setDrawColor(200);
-        doc.line(M, y, pageW - M, y);
-        y += 10;
-
-        doc.setFont('helvetica', 'normal');
-        payments.forEach((payment) => {
-          ensureSpace(25);
-
-          doc.text(new Date(payment.payment_date).toLocaleDateString(), M + 10, y);
-          doc.text(fmtMoney(Number(payment.amount)), M + 120, y);
-          doc.text(safeText(payment.payment_method).toUpperCase(), M + 200, y);
-          doc.text(safeText(payment.reference_number) || '-', M + 300, y);
-
-          y += 13;
-        });
-
-        y += 8;
-      }
-
-      ensureSpace(100);
+      ensureSpace(120);
 
       doc.setFillColor(...BLUE);
-      doc.rect(M, y, tableW, 14, 'F');
+      doc.rect(M, y, tableW, 18, 'F');
       doc.setTextColor(255, 255, 255);
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(9);
-      doc.text('SCOPE OF WORK', M + 10, y + 10);
+      doc.setFontSize(10);
+      doc.text('SCOPE OF WORK', M + 10, y + 13);
       doc.setTextColor(0, 0, 0);
 
-      y += 20;
+      y += 28;
 
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(8);
+      doc.setFontSize(9);
 
-      const scope = safeText(invoice.notes);
+      const scope = safeText(estimate.notes);
       const scopeLines = doc.splitTextToSize(scope || '—', tableW - 20);
-      const scopeBoxH = Math.max(60, scopeLines.length * 10 + 16);
+      const scopeBoxH = Math.max(70, scopeLines.length * 12 + 20);
 
       doc.setDrawColor(180);
       doc.rect(M, y - 10, tableW, scopeBoxH);
 
-      let sy = y + 8;
+      let sy = y + 10;
       scopeLines.forEach((line) => {
         doc.text(line, M + 10, sy);
-        sy += 10;
+        sy += 12;
       });
 
-      y = y - 10 + scopeBoxH + 15;
+      y = y - 10 + scopeBoxH + 20;
 
-      ensureSpace(80);
+      ensureSpace(120);
 
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(7);
+      doc.setFontSize(8);
 
-      doc.text('Please reference this invoice number in all correspondence.', M, y);
-      y += 10;
+      doc.text('Please reference this estimate number in all correspondence.', M, y);
+      y += 12;
       doc.text(`Questions? ${COMPANY.phone} | ${COMPANY.email}`, M, y);
       y += 24;
 
@@ -616,7 +694,7 @@ const handleSubmit = async (e) => {
       doc.line(pageW - M - 180, y, pageW - M, y);
       doc.text('Date', pageW - M - 180, y + 12);
 
-      doc.save(`invoice-${invoice.invoice_number}.pdf`);
+      doc.save(`estimate-${estimate.estimate_number}.pdf`);
     } catch (error) {
       console.error('Error generating PDF:', error);
       alert('Failed to generate PDF');
@@ -625,11 +703,10 @@ const handleSubmit = async (e) => {
 
   const resetForm = () => {
     setFormData({
-      invoiceNumber: '',
+      estimateNumber: '',
       customerId: '',
-      invoiceDate: new Date().toISOString().split('T')[0],
-      dueDate: '',
-      workCompletedDate: '',
+      estimateDate: new Date().toISOString().split('T')[0],
+      expiryDate: '',
       techName: '',
       notes: '',
       status: 'draft'
@@ -638,31 +715,31 @@ const handleSubmit = async (e) => {
   };
 
   if (loading) {
-    return <div className="loading">Loading invoices...</div>;
+    return <div className="loading">Loading estimates...</div>;
   }
 
   return (
     <div className="page-container">
       <div className="page-header">
-        <h2>Invoices</h2>
+        <h2>Estimates</h2>
         {!showForm && (
           <button className="btn-primary" onClick={() => setShowForm(true)}>
-            + Create Invoice
+            + Create Estimate
           </button>
         )}
       </div>
 
       {showForm && (
         <div className="form-card">
-          <h3>New Invoice</h3>
+          <h3>New Estimate</h3>
           <form onSubmit={handleSubmit}>
             <div className="form-row">
               <div className="form-group">
-                <label>Invoice Number *</label>
+                <label>Estimate Number *</label>
                 <input
                   type="text"
-                  name="invoiceNumber"
-                  value={formData.invoiceNumber}
+                  name="estimateNumber"
+                  value={formData.estimateNumber}
                   onChange={handleInputChange}
                   required
                   readOnly
@@ -699,64 +776,54 @@ const handleSubmit = async (e) => {
 
             <div className="form-row">
               <div className="form-group">
-                <label>Invoice Date *</label>
+                <label>Estimate Date *</label>
                 <input
                   type="date"
-                  name="invoiceDate"
-                  value={formData.invoiceDate}
+                  name="estimateDate"
+                  value={formData.estimateDate}
                   onChange={handleInputChange}
                   required
                 />
               </div>
               <div className="form-group">
-                <label>Due Date *</label>
+                <label>Expiry Date</label>
                 <input
                   type="date"
-                  name="dueDate"
-                  value={formData.dueDate}
+                  name="expiryDate"
+                  value={formData.expiryDate}
                   onChange={handleInputChange}
-                  required
                 />
               </div>
               <div className="form-group">
-                <label>Work Completed Date *</label>
-                <input
-                  type="date"
-                  name="workCompletedDate"
-                  value={formData.workCompletedDate}
+                <label>Status *</label>
+                <select
+                  name="status"
+                  value={formData.status}
                   onChange={handleInputChange}
                   required
-                />
+                >
+                  <option value="draft">Draft</option>
+                  <option value="sent">Sent</option>
+                  <option value="approved">Approved</option>
+                  <option value="rejected">Rejected</option>
+                  <option value="expired">Expired</option>
+                </select>
               </div>
-            </div>
-
-            <div className="form-group">
-              <label>Status *</label>
-              <select
-                name="status"
-                value={formData.status}
-                onChange={handleInputChange}
-                required
-              >
-                <option value="draft">Draft</option>
-                <option value="sent">Sent</option>
-                <option value="partial">Partial</option>
-                <option value="paid">Paid</option>
-                <option value="overdue">Overdue</option>
-                <option value="cancelled">Cancelled</option>
-              </select>
             </div>
 
             <div className="form-section" style={{ marginTop: '24px' }}>
               <h4 style={{ marginBottom: '16px' }}>Line Items</h4>
               {lineItems.map((item, index) => (
-                <div key={index} style={{
-                  backgroundColor: '#fff',
-                  border: '1px solid #e5e5e5',
-                  borderRadius: '6px',
-                  padding: '16px',
-                  marginBottom: '12px'
-                }}>
+                <div
+                  key={index}
+                  style={{
+                    backgroundColor: '#fff',
+                    border: '1px solid #e5e5e5',
+                    borderRadius: '6px',
+                    padding: '16px',
+                    marginBottom: '12px'
+                  }}
+                >
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
                     <strong>Item {index + 1}</strong>
                     {lineItems.length > 1 && (
@@ -769,6 +836,7 @@ const handleSubmit = async (e) => {
                       </button>
                     )}
                   </div>
+
                   <div className="form-group">
                     <label>Description *</label>
                     <textarea
@@ -778,6 +846,7 @@ const handleSubmit = async (e) => {
                       required
                     />
                   </div>
+
                   <div className="form-row">
                     <div className="form-group">
                       <label>Material Cost</label>
@@ -790,6 +859,7 @@ const handleSubmit = async (e) => {
                         placeholder="0.00"
                       />
                     </div>
+
                     <div className="form-group">
                       <label>Labor Cost</label>
                       <input
@@ -801,45 +871,56 @@ const handleSubmit = async (e) => {
                         placeholder="0.00"
                       />
                     </div>
+
                     <div className="form-group">
                       <label>Total</label>
-                      <div style={{
-                        padding: '10px 12px',
-                        backgroundColor: '#ecf0f1',
-                        borderRadius: '4px',
-                        fontWeight: '600'
-                      }}>
+                      <div
+                        style={{
+                          padding: '10px 12px',
+                          backgroundColor: '#ecf0f1',
+                          borderRadius: '4px',
+                          fontWeight: '600'
+                        }}
+                      >
                         ${calculateLineTotal(item).toFixed(2)}
                       </div>
                     </div>
                   </div>
                 </div>
               ))}
-              <button type="button" onClick={addLineItem} className="btn-primary" style={{ width: '100%' }}>
+
+              <button
+                type="button"
+                onClick={addLineItem}
+                className="btn-primary"
+                style={{ width: '100%' }}
+              >
                 + Add Line Item
               </button>
             </div>
 
             <div className="form-group" style={{ marginTop: '24px' }}>
-              <label>Notes</label>
+              <label>Scope of Work</label>
               <textarea
                 name="notes"
                 value={formData.notes}
                 onChange={handleInputChange}
                 rows="3"
-                placeholder="Additional notes or terms..."
+                placeholder="Enter scope of work..."
               />
             </div>
 
-            <div style={{
-              marginTop: '24px',
-              padding: '16px',
-              backgroundColor: '#f8f9fa',
-              borderRadius: '6px',
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center'
-            }}>
+            <div
+              style={{
+                marginTop: '24px',
+                padding: '16px',
+                backgroundColor: '#f8f9fa',
+                borderRadius: '6px',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}
+            >
               <strong style={{ fontSize: '18px' }}>Grand Total:</strong>
               <span style={{ fontSize: '24px', fontWeight: '700', color: '#27ae60' }}>
                 ${calculateGrandTotal().toFixed(2)}
@@ -847,11 +928,18 @@ const handleSubmit = async (e) => {
             </div>
 
             <div className="form-actions">
-              <button type="button" className="btn-secondary" onClick={() => { setShowForm(false); resetForm(); }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setShowForm(false);
+                  resetForm();
+                }}
+              >
                 Cancel
               </button>
               <button type="submit" className="btn-primary">
-                Create Invoice
+                Create Estimate
               </button>
             </div>
           </form>
@@ -859,61 +947,54 @@ const handleSubmit = async (e) => {
       )}
 
       <div className="table-container">
-        {invoices.length === 0 ? (
+        {estimates.length === 0 ? (
           <div className="empty-state">
-            <p>No invoices yet. Create your first invoice to get started!</p>
+            <p>No estimates yet. Create your first estimate to get started!</p>
           </div>
         ) : (
           <table className="data-table">
             <thead>
               <tr>
-                <th>Invoice #</th>
+                <th>Estimate #</th>
                 <th>Customer</th>
                 <th>Date</th>
-                <th>Due Date</th>
-                <th>Total</th>
-                <th>Paid</th>
-                <th>Balance</th>
+                <th>Amount</th>
                 <th>Status</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {invoices.map((invoice) => (
-                <tr key={invoice.id}>
-                  <td><strong>{invoice.invoice_number}</strong></td>
-                  <td>{invoice.customers?.name || 'Unknown'}</td>
-                  <td>{new Date(invoice.invoice_date).toLocaleDateString()}</td>
-                  <td>{new Date(invoice.due_date).toLocaleDateString()}</td>
-                  <td><strong>${parseFloat(invoice.total_amount).toFixed(2)}</strong></td>
-                  <td style={{ color: '#27ae60' }}>${parseFloat(invoice.amount_paid).toFixed(2)}</td>
-                  <td style={{ color: '#e74c3c' }}>${parseFloat(invoice.amount_due).toFixed(2)}</td>
+              {estimates.map((estimate) => (
+                <tr key={estimate.id}>
+                  <td><strong>{estimate.estimate_number}</strong></td>
+                  <td>{estimate.customers?.name || 'Unknown'}</td>
+                  <td>{new Date(estimate.estimate_date).toLocaleDateString()}</td>
+                  <td><strong>${parseFloat(estimate.total_amount).toFixed(2)}</strong></td>
                   <td>
                     <select
-                      value={invoice.status}
-                      onChange={(e) => handleStatusChange(invoice.id, e.target.value)}
-                      className={`status-badge status-${invoice.status}`}
+                      value={estimate.status}
+                      onChange={(e) => handleStatusChange(estimate.id, e.target.value)}
+                      className={`status-badge status-${estimate.status}`}
                       style={{ border: 'none', cursor: 'pointer' }}
                     >
                       <option value="draft">Draft</option>
                       <option value="sent">Sent</option>
-                      <option value="partial">Partial</option>
-                      <option value="paid">Paid</option>
-                      <option value="overdue">Overdue</option>
-                      <option value="cancelled">Cancelled</option>
+                      <option value="approved">Approved</option>
+                      <option value="rejected">Rejected</option>
+                      <option value="expired">Expired</option>
                     </select>
                   </td>
                   <td>
                     <div className="action-buttons">
                       <button
                         className="btn-small btn-view"
-                        onClick={() => downloadPDF(invoice.id)}
+                        onClick={() => downloadPDF(estimate.id)}
                       >
                         PDF
                       </button>
                       <button
                         className="btn-small btn-delete"
-                        onClick={() => handleDelete(invoice.id)}
+                        onClick={() => handleDelete(estimate.id)}
                       >
                         Delete
                       </button>
@@ -929,4 +1010,4 @@ const handleSubmit = async (e) => {
   );
 }
 
-export default Invoices;
+export default Estimates;
