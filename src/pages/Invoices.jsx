@@ -11,6 +11,7 @@ const COMPANY = {
 };
 
 const LOGO_URL = `${import.meta.env.BASE_URL}CramerLogoText.png`;
+const PDF_BUCKET = 'service-docs';
 
 async function fetchImageAsDataURL(url) {
   const res = await fetch(url, { cache: 'no-store' });
@@ -23,6 +24,57 @@ async function fetchImageAsDataURL(url) {
     reader.onerror = reject;
     reader.readAsDataURL(blob);
   });
+}
+
+async function uploadPdfToStorage({ fileName, pdfBlob }) {
+  const storagePath = `crm/${Date.now()}-${fileName}`;
+
+  const { error: uploadError } = await supabase.storage
+    .from(PDF_BUCKET)
+    .upload(storagePath, pdfBlob, {
+      contentType: 'application/pdf',
+      upsert: true
+    });
+
+  if (uploadError) throw uploadError;
+
+  const { data: publicUrlData } = supabase.storage
+    .from(PDF_BUCKET)
+    .getPublicUrl(storagePath);
+
+  return {
+    storagePath,
+    publicUrl: publicUrlData?.publicUrl || null
+  };
+}
+
+async function updateServicesCompletedPdf({ kind, recordId, pdfUrl }) {
+  const idField = kind === 'invoice' ? 'invoice_id' : 'estimate_id';
+
+  const { data: rows, error: fetchError } = await supabase
+    .from('services_completed')
+    .select('id, payload')
+    .contains('payload', { kind, [idField]: recordId });
+
+  if (fetchError) throw fetchError;
+  if (!rows || rows.length === 0) return;
+
+  for (const row of rows) {
+    const nextPayload = {
+      ...(row.payload || {}),
+      pdf_url: pdfUrl
+    };
+
+    const { error: updateError } = await supabase
+      .from('services_completed')
+      .update({
+        pdf_path: pdfUrl,
+        payload: nextPayload
+      })
+      .eq('id', row.id);
+
+    if (updateError) throw updateError;
+  }
 }
 
 function Invoices() {
@@ -56,12 +108,11 @@ function Invoices() {
 
   const generateInvoiceNumber = async () => {
     try {
-      // Generate a random invoice number and check if it already exists
       let newNumber = '';
       let isUnique = false;
 
       while (!isUnique) {
-        const randomNum = Math.floor(Math.random() * 9000) + 1000; // Random 4-digit number (1000-9999)
+        const randomNum = Math.floor(Math.random() * 9000) + 1000;
         newNumber = `INV-${randomNum}`;
 
         const { data, error } = await supabase
@@ -72,7 +123,6 @@ function Invoices() {
 
         if (error) throw error;
 
-        // If no existing invoice with this number, it's unique
         if (!data || data.length === 0) {
           isUnique = true;
         }
@@ -135,10 +185,7 @@ function Invoices() {
     return lineItems.reduce((sum, item) => sum + calculateLineTotal(item), 0);
   };
 
-  
-  // --- Sync to customer dashboard (services_completed) ---
   const upsertServiceCompletedForInvoice = async (invoiceRow, totalAmount) => {
-    // Assumption: crm_invoices.customer_id matches the portal customer's auth uid used by the dashboard.
     const payload = {
       kind: 'invoice',
       invoice_id: invoiceRow.id,
@@ -168,7 +215,7 @@ function Invoices() {
     if (error) throw error;
   };
 
-const handleSubmit = async (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
 
     try {
@@ -209,8 +256,11 @@ const handleSubmit = async (e) => {
 
       if (lineItemsError) throw lineItemsError;
 
-      // Create a dashboard entry immediately
-      await upsertServiceCompletedForInvoice(invoice, totalAmount);
+      try {
+        await upsertServiceCompletedForInvoice(invoice, totalAmount);
+      } catch (dashboardError) {
+        console.error('Invoice created, but services_completed sync failed:', dashboardError);
+      }
 
       setShowForm(false);
       resetForm();
@@ -616,7 +666,21 @@ const handleSubmit = async (e) => {
       doc.line(pageW - M - 180, y, pageW - M, y);
       doc.text('Date', pageW - M - 180, y + 12);
 
-      doc.save(`invoice-${invoice.invoice_number}.pdf`);
+      const fileName = `invoice-${invoice.invoice_number}.pdf`;
+      const pdfBlob = doc.output('blob');
+
+      const { publicUrl } = await uploadPdfToStorage({
+        fileName,
+        pdfBlob
+      });
+
+      await updateServicesCompletedPdf({
+        kind: 'invoice',
+        recordId: invoice.id,
+        pdfUrl: publicUrl
+      });
+
+      doc.save(fileName);
     } catch (error) {
       console.error('Error generating PDF:', error);
       alert('Failed to generate PDF');
@@ -750,13 +814,16 @@ const handleSubmit = async (e) => {
             <div className="form-section" style={{ marginTop: '24px' }}>
               <h4 style={{ marginBottom: '16px' }}>Line Items</h4>
               {lineItems.map((item, index) => (
-                <div key={index} style={{
-                  backgroundColor: '#fff',
-                  border: '1px solid #e5e5e5',
-                  borderRadius: '6px',
-                  padding: '16px',
-                  marginBottom: '12px'
-                }}>
+                <div
+                  key={index}
+                  style={{
+                    backgroundColor: '#fff',
+                    border: '1px solid #e5e5e5',
+                    borderRadius: '6px',
+                    padding: '16px',
+                    marginBottom: '12px'
+                  }}
+                >
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
                     <strong>Item {index + 1}</strong>
                     {lineItems.length > 1 && (
@@ -769,6 +836,7 @@ const handleSubmit = async (e) => {
                       </button>
                     )}
                   </div>
+
                   <div className="form-group">
                     <label>Description *</label>
                     <textarea
@@ -778,6 +846,7 @@ const handleSubmit = async (e) => {
                       required
                     />
                   </div>
+
                   <div className="form-row">
                     <div className="form-group">
                       <label>Material Cost</label>
@@ -790,6 +859,7 @@ const handleSubmit = async (e) => {
                         placeholder="0.00"
                       />
                     </div>
+
                     <div className="form-group">
                       <label>Labor Cost</label>
                       <input
@@ -801,20 +871,24 @@ const handleSubmit = async (e) => {
                         placeholder="0.00"
                       />
                     </div>
+
                     <div className="form-group">
                       <label>Total</label>
-                      <div style={{
-                        padding: '10px 12px',
-                        backgroundColor: '#ecf0f1',
-                        borderRadius: '4px',
-                        fontWeight: '600'
-                      }}>
+                      <div
+                        style={{
+                          padding: '10px 12px',
+                          backgroundColor: '#ecf0f1',
+                          borderRadius: '4px',
+                          fontWeight: '600'
+                        }}
+                      >
                         ${calculateLineTotal(item).toFixed(2)}
                       </div>
                     </div>
                   </div>
                 </div>
               ))}
+
               <button type="button" onClick={addLineItem} className="btn-primary" style={{ width: '100%' }}>
                 + Add Line Item
               </button>
@@ -831,15 +905,17 @@ const handleSubmit = async (e) => {
               />
             </div>
 
-            <div style={{
-              marginTop: '24px',
-              padding: '16px',
-              backgroundColor: '#f8f9fa',
-              borderRadius: '6px',
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center'
-            }}>
+            <div
+              style={{
+                marginTop: '24px',
+                padding: '16px',
+                backgroundColor: '#f8f9fa',
+                borderRadius: '6px',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}
+            >
               <strong style={{ fontSize: '18px' }}>Grand Total:</strong>
               <span style={{ fontSize: '24px', fontWeight: '700', color: '#27ae60' }}>
                 ${calculateGrandTotal().toFixed(2)}
@@ -847,7 +923,14 @@ const handleSubmit = async (e) => {
             </div>
 
             <div className="form-actions">
-              <button type="button" className="btn-secondary" onClick={() => { setShowForm(false); resetForm(); }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setShowForm(false);
+                  resetForm();
+                }}
+              >
                 Cancel
               </button>
               <button type="submit" className="btn-primary">
