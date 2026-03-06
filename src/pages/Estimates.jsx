@@ -297,7 +297,11 @@ function Estimates() {
       if (invoiceLineItemsError) throw invoiceLineItemsError;
     }
 
-    await upsertServiceCompletedForInvoice(invoice, totalAmount);
+try {
+  await upsertServiceCompletedForInvoice(invoice, totalAmount);
+} catch (dashboardError) {
+  console.error('Invoice created, but services_completed sync failed:', dashboardError);
+}
 
     return invoice;
   };
@@ -340,7 +344,11 @@ function Estimates() {
 
       if (lineItemsError) throw lineItemsError;
 
-      await upsertServiceCompletedForEstimate(estimate, totalAmount);
+  try {
+  await upsertServiceCompletedForInvoice(invoice, totalAmount);
+} catch (dashboardError) {
+  console.error('Invoice created, but services_completed sync failed:', dashboardError);
+}
 
       if (estimate.status === 'approved') {
         await createInvoiceFromEstimate(estimate.id);
