@@ -11,6 +11,7 @@ const COMPANY = {
 };
 
 const LOGO_URL = `${import.meta.env.BASE_URL}CramerLogoText.png`;
+const PDF_BUCKET = 'service-docs';
 
 async function fetchImageAsDataURL(url) {
   const res = await fetch(url, { cache: 'no-store' });
@@ -23,6 +24,57 @@ async function fetchImageAsDataURL(url) {
     reader.onerror = reject;
     reader.readAsDataURL(blob);
   });
+}
+
+async function uploadPdfToStorage({ fileName, pdfBlob }) {
+  const storagePath = `crm/${Date.now()}-${fileName}`;
+
+  const { error: uploadError } = await supabase.storage
+    .from(PDF_BUCKET)
+    .upload(storagePath, pdfBlob, {
+      contentType: 'application/pdf',
+      upsert: true
+    });
+
+  if (uploadError) throw uploadError;
+
+  const { data: publicUrlData } = supabase.storage
+    .from(PDF_BUCKET)
+    .getPublicUrl(storagePath);
+
+  return {
+    storagePath,
+    publicUrl: publicUrlData?.publicUrl || null
+  };
+}
+
+async function updateServicesCompletedPdf({ kind, recordId, pdfUrl }) {
+  const idField = kind === 'invoice' ? 'invoice_id' : 'estimate_id';
+
+  const { data: rows, error: fetchError } = await supabase
+    .from('services_completed')
+    .select('id, payload')
+    .contains('payload', { kind, [idField]: recordId });
+
+  if (fetchError) throw fetchError;
+  if (!rows || rows.length === 0) return;
+
+  for (const row of rows) {
+    const nextPayload = {
+      ...(row.payload || {}),
+      pdf_url: pdfUrl
+    };
+
+    const { error: updateError } = await supabase
+      .from('services_completed')
+      .update({
+        pdf_path: pdfUrl,
+        payload: nextPayload
+      })
+      .eq('id', row.id);
+
+    if (updateError) throw updateError;
+  }
 }
 
 function Estimates() {
@@ -53,33 +105,33 @@ function Estimates() {
     }
   }, [showForm]);
 
-const generateEstimateNumber = async () => {
-  try {
-    let newNumber = '';
-    let isUnique = false;
+  const generateEstimateNumber = async () => {
+    try {
+      let newNumber = '';
+      let isUnique = false;
 
-    while (!isUnique) {
-      const randomNum = Math.floor(Math.random() * 900000) + 100000;
-      newNumber = `EST-${randomNum}`;
+      while (!isUnique) {
+        const randomNum = Math.floor(Math.random() * 900000) + 100000;
+        newNumber = `EST-${randomNum}`;
 
-      const { data, error } = await supabase
-        .from('estimates')
-        .select('id')
-        .eq('estimate_number', newNumber)
-        .limit(1);
+        const { data, error } = await supabase
+          .from('estimates')
+          .select('id')
+          .eq('estimate_number', newNumber)
+          .limit(1);
 
-      if (error) throw error;
+        if (error) throw error;
 
-      if (!data || data.length === 0) {
-        isUnique = true;
+        if (!data || data.length === 0) {
+          isUnique = true;
+        }
       }
-    }
 
-    setFormData(prev => ({ ...prev, estimateNumber: newNumber }));
-  } catch (error) {
-    console.error('Error generating estimate number:', error);
-  }
-};
+      setFormData(prev => ({ ...prev, estimateNumber: newNumber }));
+    } catch (error) {
+      console.error('Error generating estimate number:', error);
+    }
+  };
 
   const fetchData = async () => {
     try {
@@ -299,11 +351,11 @@ const generateEstimateNumber = async () => {
       if (invoiceLineItemsError) throw invoiceLineItemsError;
     }
 
-try {
-  await upsertServiceCompletedForInvoice(invoice, totalAmount);
-} catch (dashboardError) {
-  console.error('Invoice created, but services_completed sync failed:', dashboardError);
-}
+    try {
+      await upsertServiceCompletedForInvoice(invoice, totalAmount);
+    } catch (dashboardError) {
+      console.error('Invoice created, but services_completed sync failed:', dashboardError);
+    }
 
     return invoice;
   };
@@ -346,11 +398,11 @@ try {
 
       if (lineItemsError) throw lineItemsError;
 
-  try {
-  await upsertServiceCompletedForInvoice(invoice, totalAmount);
-} catch (dashboardError) {
-  console.error('Invoice created, but services_completed sync failed:', dashboardError);
-}
+      try {
+        await upsertServiceCompletedForEstimate(estimate, totalAmount);
+      } catch (dashboardError) {
+        console.error('Estimate created, but services_completed sync failed:', dashboardError);
+      }
 
       if (estimate.status === 'approved') {
         await createInvoiceFromEstimate(estimate.id);
@@ -405,8 +457,7 @@ try {
 
       if (updateError) throw updateError;
 
-      const shouldCreateInvoice =
-        newStatus === 'approved' && oldStatus !== 'approved';
+      const shouldCreateInvoice = newStatus === 'approved' && oldStatus !== 'approved';
 
       if (shouldCreateInvoice) {
         await createInvoiceFromEstimate(id);
@@ -704,7 +755,21 @@ try {
       doc.line(pageW - M - 180, y, pageW - M, y);
       doc.text('Date', pageW - M - 180, y + 12);
 
-      doc.save(`estimate-${estimate.estimate_number}.pdf`);
+      const fileName = `estimate-${estimate.estimate_number}.pdf`;
+      const pdfBlob = doc.output('blob');
+
+      const { publicUrl } = await uploadPdfToStorage({
+        fileName,
+        pdfBlob
+      });
+
+      await updateServicesCompletedPdf({
+        kind: 'estimate',
+        recordId: estimate.id,
+        pdfUrl: publicUrl
+      });
+
+      doc.save(fileName);
     } catch (error) {
       console.error('Error generating PDF:', error);
       alert('Failed to generate PDF');
