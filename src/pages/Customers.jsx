@@ -35,44 +35,86 @@ function Customers() {
     }
   };
 
+  const normalizeEmail = (email) => {
+    return (email || '').trim().toLowerCase();
+  };
+
+  const findPortalCustomerIdByEmail = async (email) => {
+    const normalizedEmail = normalizeEmail(email);
+
+    if (!normalizedEmail) return null;
+
+    const { data, error } = await supabase
+      .from('portal_customers')
+      .select('id, email')
+      .eq('email', normalizedEmail)
+      .maybeSingle();
+
+    if (error) throw error;
+
+    return data?.id || null;
+  };
+
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
+    setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
 
     try {
+      const normalizedEmail = normalizeEmail(formData.email);
+      const portalCustomerId = await findPortalCustomerIdByEmail(normalizedEmail);
+
+      const payload = {
+        name: formData.name.trim(),
+        email: normalizedEmail || null,
+        phone: formData.phone.trim() || null,
+        address: formData.address.trim() || null,
+        notes: formData.notes.trim() || null,
+        portal_customer_id: portalCustomerId
+      };
+
       if (editingCustomer) {
         const { error } = await supabase
           .from('customers')
-          .update({ ...formData, updated_at: new Date().toISOString() })
+          .update({
+            ...payload,
+            updated_at: new Date().toISOString()
+          })
           .eq('id', editingCustomer.id);
 
         if (error) throw error;
       } else {
         const { error } = await supabase
           .from('customers')
-          .insert([formData]);
+          .insert([payload]);
 
         if (error) throw error;
       }
 
       setShowForm(false);
       setEditingCustomer(null);
-      setFormData({ name: '', email: '', phone: '', address: '', notes: '' });
-      fetchCustomers();
+      setFormData({
+        name: '',
+        email: '',
+        phone: '',
+        address: '',
+        notes: ''
+      });
+
+      await fetchCustomers();
     } catch (error) {
       console.error('Error saving customer:', error);
-      alert('Failed to save customer');
+      alert(`Failed to save customer: ${error.message || 'Unknown error'}`);
     }
   };
 
   const handleEdit = (customer) => {
     setEditingCustomer(customer);
     setFormData({
-      name: customer.name,
+      name: customer.name || '',
       email: customer.email || '',
       phone: customer.phone || '',
       address: customer.address || '',
@@ -82,7 +124,7 @@ function Customers() {
   };
 
   const handleDelete = async (id) => {
-    if (!confirm('Are you sure you want to delete this customer?')) return;
+    if (!window.confirm('Are you sure you want to delete this customer?')) return;
 
     try {
       const { error } = await supabase
@@ -91,7 +133,7 @@ function Customers() {
         .eq('id', id);
 
       if (error) throw error;
-      fetchCustomers();
+      await fetchCustomers();
     } catch (error) {
       console.error('Error deleting customer:', error);
       alert('Failed to delete customer');
@@ -101,7 +143,13 @@ function Customers() {
   const handleCancel = () => {
     setShowForm(false);
     setEditingCustomer(null);
-    setFormData({ name: '', email: '', phone: '', address: '', notes: '' });
+    setFormData({
+      name: '',
+      email: '',
+      phone: '',
+      address: '',
+      notes: ''
+    });
   };
 
   if (loading) {
@@ -133,6 +181,7 @@ function Customers() {
                 required
               />
             </div>
+
             <div className="form-row">
               <div className="form-group">
                 <label>Email</label>
@@ -143,6 +192,7 @@ function Customers() {
                   onChange={handleInputChange}
                 />
               </div>
+
               <div className="form-group">
                 <label>Phone</label>
                 <input
@@ -153,6 +203,7 @@ function Customers() {
                 />
               </div>
             </div>
+
             <div className="form-group">
               <label>Address</label>
               <textarea
@@ -162,6 +213,7 @@ function Customers() {
                 rows="3"
               />
             </div>
+
             <div className="form-group">
               <label>Notes</label>
               <textarea
@@ -171,6 +223,7 @@ function Customers() {
                 rows="3"
               />
             </div>
+
             <div className="form-actions">
               <button type="button" className="btn-secondary" onClick={handleCancel}>
                 Cancel
@@ -196,6 +249,7 @@ function Customers() {
                 <th>Email</th>
                 <th>Phone</th>
                 <th>Address</th>
+                <th>Linked Portal ID</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -206,6 +260,7 @@ function Customers() {
                   <td>{customer.email || '-'}</td>
                   <td>{customer.phone || '-'}</td>
                   <td>{customer.address || '-'}</td>
+                  <td>{customer.portal_customer_id || '-'}</td>
                   <td>
                     <div className="action-buttons">
                       <button
