@@ -53,31 +53,33 @@ function Estimates() {
     }
   }, [showForm]);
 
-  const generateEstimateNumber = async () => {
-    try {
+const generateEstimateNumber = async () => {
+  try {
+    let newNumber = '';
+    let isUnique = false;
+
+    while (!isUnique) {
+      const randomNum = Math.floor(Math.random() * 900000) + 100000;
+      newNumber = `EST-${randomNum}`;
+
       const { data, error } = await supabase
         .from('estimates')
-        .select('estimate_number')
-        .order('created_at', { ascending: false })
+        .select('id')
+        .eq('estimate_number', newNumber)
         .limit(1);
 
       if (error) throw error;
 
-      let newNumber = 'EST-0001';
-      if (data && data.length > 0) {
-        const lastNumber = data[0].estimate_number;
-        const match = lastNumber?.match(/EST-(\d+)/);
-        if (match) {
-          const nextNum = parseInt(match[1], 10) + 1;
-          newNumber = `EST-${String(nextNum).padStart(4, '0')}`;
-        }
+      if (!data || data.length === 0) {
+        isUnique = true;
       }
-
-      setFormData(prev => ({ ...prev, estimateNumber: newNumber }));
-    } catch (error) {
-      console.error('Error generating estimate number:', error);
     }
-  };
+
+    setFormData(prev => ({ ...prev, estimateNumber: newNumber }));
+  } catch (error) {
+    console.error('Error generating estimate number:', error);
+  }
+};
 
   const fetchData = async () => {
     try {
