@@ -2,17 +2,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { jsPDF } from 'jspdf';
 import './Customers.css';
-async function fetchAsDataURL(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to load image: ${url}`);
-  const blob = await res.blob();
-  return await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-}
+
 const COMPANY = {
   name: 'Cramer Services LLC',
   phone: '314-267-8594',
@@ -20,7 +10,6 @@ const COMPANY = {
   website: 'www.cramerservicesllc.com'
 };
 
-// Works on GitHub Pages + custom domain
 const LOGO_URL = `${import.meta.env.BASE_URL}CramerLogoText.png`;
 
 async function fetchImageAsDataURL(url) {
@@ -77,9 +66,9 @@ function Estimates() {
       let newNumber = 'EST-0001';
       if (data && data.length > 0) {
         const lastNumber = data[0].estimate_number;
-        const match = lastNumber.match(/EST-(\d+)/);
+        const match = lastNumber?.match(/EST-(\d+)/);
         if (match) {
-          const nextNum = parseInt(match[1]) + 1;
+          const nextNum = parseInt(match[1], 10) + 1;
           newNumber = `EST-${String(nextNum).padStart(4, '0')}`;
         }
       }
@@ -102,6 +91,9 @@ function Estimates() {
           .select('*')
           .order('name')
       ]);
+
+      if (estimatesRes.error) throw estimatesRes.error;
+      if (customersRes.error) throw customersRes.error;
 
       setEstimates(estimatesRes.data || []);
       setCustomers(customersRes.data || []);
@@ -141,17 +133,44 @@ function Estimates() {
     return lineItems.reduce((sum, item) => sum + calculateLineTotal(item), 0);
   };
 
-  
-  // --- Sync to customer dashboard (services_completed) ---
+  const addDays = (dateString, days) => {
+    const date = new Date(dateString);
+    date.setDate(date.getDate() + days);
+    return date.toISOString().split('T')[0];
+  };
+
+  const generateUniqueInvoiceNumber = async () => {
+    let isUnique = false;
+    let newNumber = '';
+
+    while (!isUnique) {
+      const randomNum = Math.floor(Math.random() * 900000) + 100000;
+      newNumber = `INV-${randomNum}`;
+
+      const { data, error } = await supabase
+        .from('crm_invoices')
+        .select('id')
+        .eq('invoice_number', newNumber)
+        .limit(1);
+
+      if (error) throw error;
+
+      if (!data || data.length === 0) {
+        isUnique = true;
+      }
+    }
+
+    return newNumber;
+  };
+
   const upsertServiceCompletedForEstimate = async (estimateRow, totalAmount) => {
-    // Assumption: estimates.customer_id matches the portal customer's auth uid used by the dashboard.
     const payload = {
       kind: 'estimate',
       estimate_id: estimateRow.id,
       estimate_number: estimateRow.estimate_number,
       status: estimateRow.status,
       total_amount: totalAmount,
-      approved: null
+      approved: estimateRow.status === 'approved'
     };
 
     const summary = `Estimate ${estimateRow.estimate_number} created for $${Number(totalAmount).toFixed(2)}`;
@@ -171,7 +190,119 @@ function Estimates() {
     if (error) throw error;
   };
 
-const handleSubmit = async (e) => {
+  const upsertServiceCompletedForInvoice = async (invoiceRow, totalAmount) => {
+    const payload = {
+      kind: 'invoice',
+      invoice_id: invoiceRow.id,
+      invoice_number: invoiceRow.invoice_number,
+      estimate_id: invoiceRow.estimate_id || null,
+      status: invoiceRow.status,
+      total_amount: totalAmount,
+      amount_paid: Number(invoiceRow.amount_paid || 0),
+      amount_due: Number(invoiceRow.amount_due || totalAmount),
+      approved: true,
+      payments: []
+    };
+
+    const summary = `Invoice ${invoiceRow.invoice_number} created. Amount due: $${Number(totalAmount).toFixed(2)}`;
+
+    const { error } = await supabase
+      .from('services_completed')
+      .insert({
+        customer_id: invoiceRow.customer_id,
+        service_type: 'invoice',
+        service_date: invoiceRow.invoice_date,
+        technician_name: invoiceRow.tech_name,
+        summary,
+        payload,
+        completed_at: new Date().toISOString()
+      });
+
+    if (error) throw error;
+  };
+
+  const createInvoiceFromEstimate = async (estimateId) => {
+    const { data: existingInvoice, error: existingInvoiceError } = await supabase
+      .from('crm_invoices')
+      .select('id, invoice_number')
+      .eq('estimate_id', estimateId)
+      .maybeSingle();
+
+    if (existingInvoiceError) throw existingInvoiceError;
+
+    if (existingInvoice) {
+      return existingInvoice;
+    }
+
+    const { data: estimate, error: estimateError } = await supabase
+      .from('estimates')
+      .select('*')
+      .eq('id', estimateId)
+      .single();
+
+    if (estimateError) throw estimateError;
+
+    const { data: estimateItems, error: estimateItemsError } = await supabase
+      .from('estimate_line_items')
+      .select('*')
+      .eq('estimate_id', estimateId)
+      .order('sort_order', { ascending: true });
+
+    if (estimateItemsError) throw estimateItemsError;
+
+    const invoiceNumber = await generateUniqueInvoiceNumber();
+
+    const today = new Date().toISOString().split('T')[0];
+    const dueDate = addDays(today, 7);
+
+    const totalAmount = Number(estimate.total_amount || 0);
+
+    const invoiceInsert = {
+      invoice_number: invoiceNumber,
+      customer_id: estimate.customer_id,
+      estimate_id: estimate.id,
+      invoice_date: today,
+      due_date: dueDate,
+      work_completed_date: today,
+      tech_name: estimate.tech_name || '',
+      notes: estimate.notes || '',
+      status: 'draft',
+      total_amount: totalAmount,
+      amount_paid: 0,
+      amount_due: totalAmount
+    };
+
+    const { data: invoice, error: invoiceError } = await supabase
+      .from('crm_invoices')
+      .insert(invoiceInsert)
+      .select()
+      .single();
+
+    if (invoiceError) throw invoiceError;
+
+    if (estimateItems && estimateItems.length > 0) {
+      const invoiceLineItems = estimateItems.map((item, index) => ({
+        invoice_id: invoice.id,
+        description: item.description || '',
+        material_cost: Number(item.material_cost || 0),
+        labor_cost: Number(item.labor_cost || 0),
+        total_cost: Number(item.total_cost || 0),
+        sort_order: item.sort_order ?? index
+      }));
+
+      const { error: invoiceLineItemsError } = await supabase
+        .from('crm_invoice_line_items')
+        .insert(invoiceLineItems);
+
+      if (invoiceLineItemsError) throw invoiceLineItemsError;
+    }
+
+    await upsertServiceCompletedForInvoice(invoice, totalAmount);
+
+    return invoice;
+  };
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
 
     try {
@@ -209,12 +340,15 @@ const handleSubmit = async (e) => {
 
       if (lineItemsError) throw lineItemsError;
 
-      // Create a dashboard entry immediately
       await upsertServiceCompletedForEstimate(estimate, totalAmount);
+
+      if (estimate.status === 'approved') {
+        await createInvoiceFromEstimate(estimate.id);
+      }
 
       setShowForm(false);
       resetForm();
-      fetchData();
+      await fetchData();
       alert('Estimate created successfully!');
     } catch (error) {
       console.error('Error saving estimate:', error);
@@ -223,7 +357,7 @@ const handleSubmit = async (e) => {
   };
 
   const handleDelete = async (id) => {
-    if (!confirm('Are you sure you want to delete this estimate?')) return;
+    if (!window.confirm('Are you sure you want to delete this estimate?')) return;
 
     try {
       const { error } = await supabase
@@ -232,7 +366,7 @@ const handleSubmit = async (e) => {
         .eq('id', id);
 
       if (error) throw error;
-      fetchData();
+      await fetchData();
     } catch (error) {
       console.error('Error deleting estimate:', error);
       alert('Failed to delete estimate');
@@ -241,331 +375,331 @@ const handleSubmit = async (e) => {
 
   const handleStatusChange = async (id, newStatus) => {
     try {
-      const { error } = await supabase
+      const { data: currentEstimate, error: currentEstimateError } = await supabase
         .from('estimates')
-        .update({ status: newStatus, updated_at: new Date().toISOString() })
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      if (currentEstimateError) throw currentEstimateError;
+
+      const oldStatus = currentEstimate.status;
+
+      const { error: updateError } = await supabase
+        .from('estimates')
+        .update({
+          status: newStatus,
+          updated_at: new Date().toISOString()
+        })
         .eq('id', id);
 
-      if (error) throw error;
-      fetchData();
+      if (updateError) throw updateError;
+
+      const shouldCreateInvoice =
+        newStatus === 'approved' && oldStatus !== 'approved';
+
+      if (shouldCreateInvoice) {
+        await createInvoiceFromEstimate(id);
+      }
+
+      await fetchData();
     } catch (error) {
       console.error('Error updating status:', error);
       alert('Failed to update status');
     }
   };
-const downloadPDF = async (estimateId) => {
-  try {
-    const { data: estimate, error: estErr } = await supabase
-      .from('estimates')
-      .select('*, customers(*)')
-      .eq('id', estimateId)
-      .single();
 
-    if (estErr) throw estErr;
-
-    const { data: items, error: itemsErr } = await supabase
-      .from('estimate_line_items')
-      .select('*')
-      .eq('estimate_id', estimateId)
-      .order('sort_order');
-
-    if (itemsErr) throw itemsErr;
-
-    // Letter size in points: 612 x 792
-    const doc = new jsPDF({ unit: 'pt', format: 'letter' });
-    const pageW = doc.internal.pageSize.getWidth();
-    const pageH = doc.internal.pageSize.getHeight();
-
-    const M = 40;
-    const BLUE = [30, 80, 160];
-    const LIGHT_GRAY = [240, 240, 240];
-
-    const fmtMoney = (n) => `$${(Number(n) || 0).toFixed(2)}`;
-    const safeText = (val) => (val ? String(val) : '');
-
-    // Try to load logo
-    let logoDataUrl = null;
+  const downloadPDF = async (estimateId) => {
     try {
-      logoDataUrl = await fetchImageAsDataURL(LOGO_URL);
-    } catch (e) {
-      console.warn('Logo not loaded:', e);
-    }
+      const { data: estimate, error: estErr } = await supabase
+        .from('estimates')
+        .select('*, customers(*)')
+        .eq('id', estimateId)
+        .single();
 
-    // ===== Header =====
-    let y = M;
+      if (estErr) throw estErr;
 
-    if (logoDataUrl) {
-      doc.addImage(logoDataUrl, 'PNG', M, y - 8, 210, 55);
-    } else {
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(18);
-      doc.text(COMPANY.name, M, y + 20);
-    }
+      const { data: items, error: itemsErr } = await supabase
+        .from('estimate_line_items')
+        .select('*')
+        .eq('estimate_id', estimateId)
+        .order('sort_order');
 
-    // Company info under logo
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-    const companyInfoX = M;
-    const companyInfoY = y + 60;
-    doc.text(`Phone: ${COMPANY.phone}`, companyInfoX, companyInfoY);
-    doc.text(`Email: ${COMPANY.email}`, companyInfoX, companyInfoY + 12);
-    doc.text(`Website: ${COMPANY.website}`, companyInfoX, companyInfoY + 24);
+      if (itemsErr) throw itemsErr;
 
-    // Right box: ESTIMATE
-    const rightBoxW = 220;
-    const rightBoxX = pageW - M - rightBoxW;
-    const rightBoxY = y;
+      const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+      const pageW = doc.internal.pageSize.getWidth();
+      const pageH = doc.internal.pageSize.getHeight();
 
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(16);
-    doc.text('ESTIMATE', rightBoxX + rightBoxW / 2, rightBoxY + 18, { align: 'center' });
+      const M = 40;
+      const BLUE = [30, 80, 160];
+      const LIGHT_GRAY = [240, 240, 240];
 
-    // Blue bar + Estimate #
-    doc.setFillColor(...BLUE);
-    doc.rect(rightBoxX, rightBoxY + 26, rightBoxW, 18, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(10);
-    doc.text(`ESTIMATE #`, rightBoxX + 10, rightBoxY + 39);
-    doc.text(safeText(estimate.estimate_number), rightBoxX + rightBoxW - 10, rightBoxY + 39, { align: 'right' });
+      const fmtMoney = (n) => `$${(Number(n) || 0).toFixed(2)}`;
+      const safeText = (val) => (val ? String(val) : '');
 
-    // Date row
-    doc.setTextColor(0, 0, 0);
-    doc.setFillColor(...LIGHT_GRAY);
-    doc.rect(rightBoxX, rightBoxY + 44, rightBoxW, 18, 'F');
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    doc.text('DATE', rightBoxX + 10, rightBoxY + 57);
-    doc.setFont('helvetica', 'normal');
-    doc.text(
-      new Date(estimate.estimate_date).toLocaleDateString(),
-      rightBoxX + rightBoxW - 10,
-      rightBoxY + 57,
-      { align: 'right' }
-    );
-
-    // Move down below header area
-    y = companyInfoY + 45;
-
-    // ✅ REMOVED: "Requested By / Customer ID" section entirely
-
-    // ===== Two column boxes: BILL TO + JOB DETAILS =====
-    const boxH = 110;
-    const gap = 12;
-    const boxW = (pageW - 2 * M - gap) / 2;
-
-    const billX = M;
-    const jobX = M + boxW + gap;
-    const headerH = 18;
-
-    // BILL TO box
-    doc.setDrawColor(180);
-    doc.rect(billX, y, boxW, boxH);
-    doc.setFillColor(...BLUE);
-    doc.rect(billX, y, boxW, headerH, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    doc.text('BILL TO', billX + 10, y + 13);
-
-    doc.setTextColor(0, 0, 0);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-
-    let by = y + headerH + 16;
-    doc.text(safeText(estimate.customers?.name), billX + 10, by);
-    by += 12;
-
-    const addr = safeText(estimate.customers?.address);
-    if (addr) {
-      const addrLines = doc.splitTextToSize(addr, boxW - 20);
-      addrLines.forEach((line) => {
-        doc.text(line, billX + 10, by);
-        by += 12;
-      });
-    }
-
-    const custEmail = safeText(estimate.customers?.email);
-    const custPhone = safeText(estimate.customers?.phone);
-    if (custEmail) doc.text(custEmail, billX + 10, y + boxH - 28);
-    if (custPhone) doc.text(custPhone, billX + 10, y + boxH - 14);
-
-    // JOB DETAILS box
-    doc.rect(jobX, y, boxW, boxH);
-    doc.setFillColor(...BLUE);
-    doc.rect(jobX, y, boxW, headerH, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    doc.text('JOB DETAILS', jobX + 10, y + 13);
-
-    doc.setTextColor(0, 0, 0);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-
-    const tech = safeText(estimate.tech_name);
-    doc.text(`Technician: ${tech || '-'}`, jobX + 10, y + headerH + 18);
-
-    const expires = estimate.expiry_date ? new Date(estimate.expiry_date).toLocaleDateString() : '';
-    doc.text(`Expires: ${expires || '-'}`, jobX + 10, y + headerH + 34);
-
-    doc.setFontSize(8);
-    doc.setTextColor(120, 120, 120);
-    doc.text('[Enter general description of work]', jobX + 10, y + headerH + 55);
-    doc.setTextColor(0, 0, 0);
-
-    y += boxH + 14;
-
-    // ===== Line items table (Material + Labor + Total) =====
-    const tableX = M;
-    const tableW = pageW - 2 * M;
-
-    const col = {
-      qty: tableX + 10,
-      desc: tableX + 55,
-      material: tableX + tableW - 170,
-      labor: tableX + tableW - 115,
-      total: tableX + tableW - 55
-    };
-
-    // Header bar
-    doc.setFillColor(...BLUE);
-    doc.rect(tableX, y, tableW, 18, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9);
-    doc.text('QTY', col.qty, y + 13);
-    doc.text('DESCRIPTION', col.desc, y + 13);
-    doc.text('MATERIAL', col.material, y + 13, { align: 'right' });
-    doc.text('LABOR', col.labor, y + 13, { align: 'right' });
-    doc.text('TOTAL', col.total, y + 13, { align: 'right' });
-
-    doc.setTextColor(0, 0, 0);
-    y += 24;
-
-    doc.setDrawColor(200);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-
-    const lineHeight = 14;
-
-    const ensureSpace = (needed) => {
-      if (y + needed > pageH - 140) {
-        doc.addPage();
-        y = M;
+      let logoDataUrl = null;
+      try {
+        logoDataUrl = await fetchImageAsDataURL(LOGO_URL);
+      } catch (e) {
+        console.warn('Logo not loaded:', e);
       }
-    };
 
-    items.forEach((item) => {
-      ensureSpace(50);
+      let y = M;
 
-      const qty = 1;
+      if (logoDataUrl) {
+        doc.addImage(logoDataUrl, 'PNG', M, y - 8, 210, 55);
+      } else {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(18);
+        doc.text(COMPANY.name, M, y + 20);
+      }
 
-      const material = Number(item.material_cost) || 0;
-      const labor = Number(item.labor_cost) || 0;
-      const total = Number(item.total_cost) || (material + labor);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      const companyInfoX = M;
+      const companyInfoY = y + 60;
+      doc.text(`Phone: ${COMPANY.phone}`, companyInfoX, companyInfoY);
+      doc.text(`Email: ${COMPANY.email}`, companyInfoX, companyInfoY + 12);
+      doc.text(`Website: ${COMPANY.website}`, companyInfoX, companyInfoY + 24);
 
-      const descLines = doc.splitTextToSize(
-        safeText(item.description),
-        (col.material - 10) - col.desc
+      const rightBoxW = 220;
+      const rightBoxX = pageW - M - rightBoxW;
+      const rightBoxY = y;
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(16);
+      doc.text('ESTIMATE', rightBoxX + rightBoxW / 2, rightBoxY + 18, { align: 'center' });
+
+      doc.setFillColor(...BLUE);
+      doc.rect(rightBoxX, rightBoxY + 26, rightBoxW, 18, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(10);
+      doc.text(`ESTIMATE #`, rightBoxX + 10, rightBoxY + 39);
+      doc.text(safeText(estimate.estimate_number), rightBoxX + rightBoxW - 10, rightBoxY + 39, { align: 'right' });
+
+      doc.setTextColor(0, 0, 0);
+      doc.setFillColor(...LIGHT_GRAY);
+      doc.rect(rightBoxX, rightBoxY + 44, rightBoxW, 18, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.text('DATE', rightBoxX + 10, rightBoxY + 57);
+      doc.setFont('helvetica', 'normal');
+      doc.text(
+        new Date(estimate.estimate_date).toLocaleDateString(),
+        rightBoxX + rightBoxW - 10,
+        rightBoxY + 57,
+        { align: 'right' }
       );
-      const rowH2 = Math.max(descLines.length * lineHeight, lineHeight) + 10;
 
-      // Row border
-      doc.rect(tableX, y - 10, tableW, rowH2);
+      y = companyInfoY + 45;
 
-      doc.text(String(qty), col.qty, y);
+      const boxH = 110;
+      const gap = 12;
+      const boxW = (pageW - 2 * M - gap) / 2;
 
-      descLines.forEach((line, i) => {
-        doc.text(line, col.desc, y + i * lineHeight);
+      const billX = M;
+      const jobX = M + boxW + gap;
+      const headerH = 18;
+
+      doc.setDrawColor(180);
+      doc.rect(billX, y, boxW, boxH);
+      doc.setFillColor(...BLUE);
+      doc.rect(billX, y, boxW, headerH, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.text('BILL TO', billX + 10, y + 13);
+
+      doc.setTextColor(0, 0, 0);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+
+      let by = y + headerH + 16;
+      doc.text(safeText(estimate.customers?.name), billX + 10, by);
+      by += 12;
+
+      const addr = safeText(estimate.customers?.address);
+      if (addr) {
+        const addrLines = doc.splitTextToSize(addr, boxW - 20);
+        addrLines.forEach((line) => {
+          doc.text(line, billX + 10, by);
+          by += 12;
+        });
+      }
+
+      const custEmail = safeText(estimate.customers?.email);
+      const custPhone = safeText(estimate.customers?.phone);
+      if (custEmail) doc.text(custEmail, billX + 10, y + boxH - 28);
+      if (custPhone) doc.text(custPhone, billX + 10, y + boxH - 14);
+
+      doc.rect(jobX, y, boxW, boxH);
+      doc.setFillColor(...BLUE);
+      doc.rect(jobX, y, boxW, headerH, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.text('JOB DETAILS', jobX + 10, y + 13);
+
+      doc.setTextColor(0, 0, 0);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+
+      const tech = safeText(estimate.tech_name);
+      doc.text(`Technician: ${tech || '-'}`, jobX + 10, y + headerH + 18);
+
+      const expires = estimate.expiry_date ? new Date(estimate.expiry_date).toLocaleDateString() : '';
+      doc.text(`Expires: ${expires || '-'}`, jobX + 10, y + headerH + 34);
+
+      doc.setFontSize(8);
+      doc.setTextColor(120, 120, 120);
+      doc.text('[Enter general description of work]', jobX + 10, y + headerH + 55);
+      doc.setTextColor(0, 0, 0);
+
+      y += boxH + 14;
+
+      const tableX = M;
+      const tableW = pageW - 2 * M;
+
+      const col = {
+        qty: tableX + 10,
+        desc: tableX + 55,
+        material: tableX + tableW - 170,
+        labor: tableX + tableW - 115,
+        total: tableX + tableW - 55
+      };
+
+      doc.setFillColor(...BLUE);
+      doc.rect(tableX, y, tableW, 18, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.text('QTY', col.qty, y + 13);
+      doc.text('DESCRIPTION', col.desc, y + 13);
+      doc.text('MATERIAL', col.material, y + 13, { align: 'right' });
+      doc.text('LABOR', col.labor, y + 13, { align: 'right' });
+      doc.text('TOTAL', col.total, y + 13, { align: 'right' });
+
+      doc.setTextColor(0, 0, 0);
+      y += 24;
+
+      doc.setDrawColor(200);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+
+      const lineHeight = 14;
+
+      const ensureSpace = (needed) => {
+        if (y + needed > pageH - 140) {
+          doc.addPage();
+          y = M;
+        }
+      };
+
+      items.forEach((item) => {
+        ensureSpace(50);
+
+        const qty = 1;
+        const material = Number(item.material_cost) || 0;
+        const labor = Number(item.labor_cost) || 0;
+        const total = Number(item.total_cost) || (material + labor);
+
+        const descLines = doc.splitTextToSize(
+          safeText(item.description),
+          (col.material - 10) - col.desc
+        );
+        const rowH2 = Math.max(descLines.length * lineHeight, lineHeight) + 10;
+
+        doc.rect(tableX, y - 10, tableW, rowH2);
+
+        doc.text(String(qty), col.qty, y);
+
+        descLines.forEach((line, i) => {
+          doc.text(line, col.desc, y + i * lineHeight);
+        });
+
+        doc.text(fmtMoney(material), col.material, y, { align: 'right' });
+        doc.text(fmtMoney(labor), col.labor, y, { align: 'right' });
+        doc.text(fmtMoney(total), col.total, y, { align: 'right' });
+
+        y += rowH2;
       });
 
-      doc.text(fmtMoney(material), col.material, y, { align: 'right' });
-      doc.text(fmtMoney(labor), col.labor, y, { align: 'right' });
-      doc.text(fmtMoney(total), col.total, y, { align: 'right' });
+      ensureSpace(120);
 
-      y += rowH2;
-    });
+      const totalsW = 200;
+      const totalsX = tableX + tableW - totalsW;
+      const totalsY = y + 10;
 
-    // ===== TOTAL ONLY (NO TAX SECTION) =====
-    ensureSpace(120);
+      doc.setDrawColor(180);
+      doc.rect(totalsX, totalsY, totalsW, 50);
 
-    const totalsW = 200;
-    const totalsX = tableX + tableW - totalsW;
-    const totalsY = y + 10;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
 
-    doc.setDrawColor(180);
-    doc.rect(totalsX, totalsY, totalsW, 50);
+      doc.setFillColor(...BLUE);
+      doc.rect(totalsX, totalsY, totalsW, 22, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.text('TOTAL', totalsX + 10, totalsY + 15);
+      doc.text(fmtMoney(Number(estimate.total_amount) || 0), totalsX + totalsW - 10, totalsY + 15, { align: 'right' });
 
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
+      doc.setTextColor(0, 0, 0);
 
-    doc.setFillColor(...BLUE);
-    doc.rect(totalsX, totalsY, totalsW, 22, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.text('TOTAL', totalsX + 10, totalsY + 15);
-    doc.text(fmtMoney(Number(estimate.total_amount) || 0), totalsX + totalsW - 10, totalsY + 15, { align: 'right' });
+      y = totalsY + 70;
 
-    doc.setTextColor(0, 0, 0);
+      ensureSpace(120);
 
-    y = totalsY + 70;
+      doc.setFillColor(...BLUE);
+      doc.rect(M, y, tableW, 18, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.text('SCOPE OF WORK', M + 10, y + 13);
+      doc.setTextColor(0, 0, 0);
 
-    // ===== Scope of Work =====
-    ensureSpace(120);
+      y += 28;
 
-    doc.setFillColor(...BLUE);
-    doc.rect(M, y, tableW, 18, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    doc.text('SCOPE OF WORK', M + 10, y + 13);
-    doc.setTextColor(0, 0, 0);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
 
-    y += 28;
+      const scope = safeText(estimate.notes);
+      const scopeLines = doc.splitTextToSize(scope || '—', tableW - 20);
+      const scopeBoxH = Math.max(70, scopeLines.length * 12 + 20);
 
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
+      doc.setDrawColor(180);
+      doc.rect(M, y - 10, tableW, scopeBoxH);
 
-    const scope = safeText(estimate.notes);
-    const scopeLines = doc.splitTextToSize(scope || '—', tableW - 20);
-    const scopeBoxH = Math.max(70, scopeLines.length * 12 + 20);
+      let sy = y + 10;
+      scopeLines.forEach((line) => {
+        doc.text(line, M + 10, sy);
+        sy += 12;
+      });
 
-    doc.setDrawColor(180);
-    doc.rect(M, y - 10, tableW, scopeBoxH);
+      y = y - 10 + scopeBoxH + 20;
 
-    let sy = y + 10;
-    scopeLines.forEach((line) => {
-      doc.text(line, M + 10, sy);
-      sy += 12;
-    });
+      ensureSpace(120);
 
-    y = y - 10 + scopeBoxH + 20;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
 
-    // ===== Footer / signature =====
-    ensureSpace(120);
+      doc.text('Please reference this estimate number in all correspondence.', M, y);
+      y += 12;
+      doc.text(`Questions? ${COMPANY.phone} | ${COMPANY.email}`, M, y);
+      y += 24;
 
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
+      doc.setDrawColor(0);
+      doc.line(M, y, M + 260, y);
+      doc.text('Signature', M, y + 12);
 
-    doc.text('Please reference this estimate number in all correspondence.', M, y);
-    y += 12;
-    doc.text(`Questions? ${COMPANY.phone} | ${COMPANY.email}`, M, y);
-    y += 24;
+      doc.line(pageW - M - 180, y, pageW - M, y);
+      doc.text('Date', pageW - M - 180, y + 12);
 
-    doc.setDrawColor(0);
-    doc.line(M, y, M + 260, y);
-    doc.text('Signature', M, y + 12);
-
-    doc.line(pageW - M - 180, y, pageW - M, y);
-    doc.text('Date', pageW - M - 180, y + 12);
-
-    doc.save(`estimate-${estimate.estimate_number}.pdf`);
-  } catch (error) {
-    console.error('Error generating PDF:', error);
-    alert('Failed to generate PDF');
-  }
-};
-
-
+      doc.save(`estimate-${estimate.estimate_number}.pdf`);
+    } catch (error) {
+      console.error('Error generating PDF:', error);
+      alert('Failed to generate PDF');
+    }
+  };
 
   const resetForm = () => {
     setFormData({
@@ -680,13 +814,16 @@ const downloadPDF = async (estimateId) => {
             <div className="form-section" style={{ marginTop: '24px' }}>
               <h4 style={{ marginBottom: '16px' }}>Line Items</h4>
               {lineItems.map((item, index) => (
-                <div key={index} style={{
-                  backgroundColor: '#fff',
-                  border: '1px solid #e5e5e5',
-                  borderRadius: '6px',
-                  padding: '16px',
-                  marginBottom: '12px'
-                }}>
+                <div
+                  key={index}
+                  style={{
+                    backgroundColor: '#fff',
+                    border: '1px solid #e5e5e5',
+                    borderRadius: '6px',
+                    padding: '16px',
+                    marginBottom: '12px'
+                  }}
+                >
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
                     <strong>Item {index + 1}</strong>
                     {lineItems.length > 1 && (
@@ -699,6 +836,7 @@ const downloadPDF = async (estimateId) => {
                       </button>
                     )}
                   </div>
+
                   <div className="form-group">
                     <label>Description *</label>
                     <textarea
@@ -708,6 +846,7 @@ const downloadPDF = async (estimateId) => {
                       required
                     />
                   </div>
+
                   <div className="form-row">
                     <div className="form-group">
                       <label>Material Cost</label>
@@ -720,6 +859,7 @@ const downloadPDF = async (estimateId) => {
                         placeholder="0.00"
                       />
                     </div>
+
                     <div className="form-group">
                       <label>Labor Cost</label>
                       <input
@@ -731,46 +871,56 @@ const downloadPDF = async (estimateId) => {
                         placeholder="0.00"
                       />
                     </div>
+
                     <div className="form-group">
                       <label>Total</label>
-                      <div style={{
-                        padding: '10px 12px',
-                        backgroundColor: '#ecf0f1',
-                        borderRadius: '4px',
-                        fontWeight: '600'
-                      }}>
+                      <div
+                        style={{
+                          padding: '10px 12px',
+                          backgroundColor: '#ecf0f1',
+                          borderRadius: '4px',
+                          fontWeight: '600'
+                        }}
+                      >
                         ${calculateLineTotal(item).toFixed(2)}
                       </div>
                     </div>
                   </div>
                 </div>
               ))}
-              <button type="button" onClick={addLineItem} className="btn-primary" style={{ width: '100%' }}>
+
+              <button
+                type="button"
+                onClick={addLineItem}
+                className="btn-primary"
+                style={{ width: '100%' }}
+              >
                 + Add Line Item
               </button>
             </div>
 
             <div className="form-group" style={{ marginTop: '24px' }}>
-       <label>Scope of Work</label>
-<textarea
-  name="notes"
-  value={formData.notes}
-  onChange={handleInputChange}
-  rows="3"
-  placeholder="Enter scope of work..."
-/>
-
+              <label>Scope of Work</label>
+              <textarea
+                name="notes"
+                value={formData.notes}
+                onChange={handleInputChange}
+                rows="3"
+                placeholder="Enter scope of work..."
+              />
             </div>
 
-            <div style={{
-              marginTop: '24px',
-              padding: '16px',
-              backgroundColor: '#f8f9fa',
-              borderRadius: '6px',
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center'
-            }}>
+            <div
+              style={{
+                marginTop: '24px',
+                padding: '16px',
+                backgroundColor: '#f8f9fa',
+                borderRadius: '6px',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}
+            >
               <strong style={{ fontSize: '18px' }}>Grand Total:</strong>
               <span style={{ fontSize: '24px', fontWeight: '700', color: '#27ae60' }}>
                 ${calculateGrandTotal().toFixed(2)}
@@ -778,7 +928,14 @@ const downloadPDF = async (estimateId) => {
             </div>
 
             <div className="form-actions">
-              <button type="button" className="btn-secondary" onClick={() => { setShowForm(false); resetForm(); }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setShowForm(false);
+                  resetForm();
+                }}
+              >
                 Cancel
               </button>
               <button type="submit" className="btn-primary">
