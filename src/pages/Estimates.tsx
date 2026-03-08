@@ -6,7 +6,7 @@ import './Customers.css';
 const COMPANY = {
   name: 'Cramer Services LLC',
   phone: '314-267-8594',
-  email: 'cramerservicesllc@gmail.com', 
+  email: 'cramerservicesllc@gmail.com',
   website: 'www.cramerservicesllc.com'
 };
 
@@ -52,43 +52,6 @@ async function uploadPdfToStorage({
     storagePath,
     publicUrl: publicUrlData?.publicUrl || null
   };
-}
-
-async function updateServicesCompletedPdf({
-  kind,
-  recordId,
-  pdfUrl
-}: {
-  kind: 'invoice' | 'estimate';
-  recordId: string;
-  pdfUrl: string | null;
-}) {
-  const idField = kind === 'invoice' ? 'invoice_id' : 'estimate_id';
-
-  const { data: rows, error: fetchError } = await supabase
-    .from('services_completed')
-    .select('id, payload')
-    .contains('payload', { kind, [idField]: recordId });
-
-  if (fetchError) throw fetchError;
-  if (!rows || rows.length === 0) return;
-
-  for (const row of rows) {
-    const nextPayload = {
-      ...(row.payload || {}),
-      pdf_url: pdfUrl
-    };
-
-    const { error: updateError } = await supabase
-      .from('services_completed')
-      .update({
-        pdf_path: pdfUrl,
-        payload: nextPayload
-      })
-      .eq('id', row.id);
-
-    if (updateError) throw updateError;
-  }
 }
 
 type EstimateRow = {
@@ -195,6 +158,7 @@ function Estimates() {
       setCustomers(customersRes.data || []);
     } catch (error) {
       console.error('Error fetching data:', error);
+      alert('Failed to load estimates');
     } finally {
       setLoading(false);
     }
@@ -261,62 +225,146 @@ function Estimates() {
     return newNumber;
   };
 
-  const upsertServiceCompletedForEstimate = async (estimateRow: any, totalAmount: number) => {
+  const syncEstimateToServicesCompleted = async (
+    estimateId: string,
+    pdfUrl: string | null = null
+  ) => {
+    const { data: estimateRow, error: estimateError } = await supabase
+      .from('estimates')
+      .select('*')
+      .eq('id', estimateId)
+      .single();
+
+    if (estimateError) throw estimateError;
+
+    const estimate = estimateRow as any;
+
     const payload = {
       kind: 'estimate',
-      estimate_id: estimateRow.id,
-      estimate_number: estimateRow.estimate_number,
-      status: estimateRow.status,
-      total_amount: totalAmount,
-      approved: estimateRow.status === 'approved'
+      estimate_id: estimate.id,
+      estimate_number: estimate.estimate_number,
+      status: estimate.status,
+      total_amount: Number(estimate.total_amount || 0),
+      approved: estimate.status === 'approved',
+      pdf_url: pdfUrl
     };
 
-    const summary = `Estimate ${estimateRow.estimate_number} created for $${Number(totalAmount).toFixed(2)}`;
+    const summary = `Estimate ${estimate.estimate_number} created for $${Number(
+      estimate.total_amount || 0
+    ).toFixed(2)}`;
 
-    const { error } = await supabase
+    const { data: existingRows, error: existingError } = await supabase
       .from('services_completed')
-      .insert({
-        customer_id: estimateRow.customer_id,
-        service_type: 'estimate',
-        service_date: estimateRow.estimate_date,
-        technician_name: estimateRow.tech_name,
-        summary,
-        payload,
-        completed_at: new Date().toISOString()
-      });
+      .select('id')
+      .contains('payload', { kind: 'estimate', estimate_id: estimate.id });
 
-    if (error) throw error;
+    if (existingError) throw existingError;
+
+    if (existingRows && existingRows.length > 0) {
+      const { error: updateError } = await supabase
+        .from('services_completed')
+        .update({
+          customer_id: estimate.customer_id,
+          service_type: 'estimate',
+          service_date: estimate.estimate_date,
+          technician_name: estimate.tech_name,
+          summary,
+          pdf_path: pdfUrl,
+          payload,
+          completed_at: new Date().toISOString()
+        })
+        .eq('id', existingRows[0].id);
+
+      if (updateError) throw updateError;
+    } else {
+      const { error: insertError } = await supabase
+        .from('services_completed')
+        .insert({
+          customer_id: estimate.customer_id,
+          service_type: 'estimate',
+          service_date: estimate.estimate_date,
+          technician_name: estimate.tech_name,
+          summary,
+          pdf_path: pdfUrl,
+          payload,
+          completed_at: new Date().toISOString()
+        });
+
+      if (insertError) throw insertError;
+    }
   };
 
-  const upsertServiceCompletedForInvoice = async (invoiceRow: any, totalAmount: number) => {
+  const syncInvoiceToServicesCompleted = async (
+    invoiceId: string,
+    pdfUrl: string | null = null
+  ) => {
+    const { data: invoiceRow, error: invoiceError } = await supabase
+      .from('crm_invoices')
+      .select('*')
+      .eq('id', invoiceId)
+      .single();
+
+    if (invoiceError) throw invoiceError;
+
+    const invoice = invoiceRow as any;
+
     const payload = {
       kind: 'invoice',
-      invoice_id: invoiceRow.id,
-      invoice_number: invoiceRow.invoice_number,
-      estimate_id: invoiceRow.estimate_id || null,
-      status: invoiceRow.status,
-      total_amount: totalAmount,
-      amount_paid: Number(invoiceRow.amount_paid || 0),
-      amount_due: Number(invoiceRow.amount_due || totalAmount),
-      approved: true,
-      payments: []
+      invoice_id: invoice.id,
+      invoice_number: invoice.invoice_number,
+      estimate_id: invoice.estimate_id || null,
+      status: invoice.status,
+      total_amount: Number(invoice.total_amount || 0),
+      amount_paid: Number(invoice.amount_paid || 0),
+      amount_due: Number(invoice.amount_due || 0),
+      approved: null,
+      payments: [],
+      pdf_url: pdfUrl
     };
 
-    const summary = `Invoice ${invoiceRow.invoice_number} created. Amount due: $${Number(totalAmount).toFixed(2)}`;
+    const summary = `Invoice ${invoice.invoice_number} created. Amount due: $${Number(
+      invoice.total_amount || 0
+    ).toFixed(2)}`;
 
-    const { error } = await supabase
+    const { data: existingRows, error: existingError } = await supabase
       .from('services_completed')
-      .insert({
-        customer_id: invoiceRow.customer_id,
-        service_type: 'invoice',
-        service_date: invoiceRow.invoice_date,
-        technician_name: invoiceRow.tech_name,
-        summary,
-        payload,
-        completed_at: new Date().toISOString()
-      });
+      .select('id')
+      .contains('payload', { kind: 'invoice', invoice_id: invoice.id });
 
-    if (error) throw error;
+    if (existingError) throw existingError;
+
+    if (existingRows && existingRows.length > 0) {
+      const { error: updateError } = await supabase
+        .from('services_completed')
+        .update({
+          customer_id: invoice.customer_id,
+          service_type: 'invoice',
+          service_date: invoice.invoice_date,
+          technician_name: invoice.tech_name,
+          summary,
+          pdf_path: pdfUrl,
+          payload,
+          completed_at: new Date().toISOString()
+        })
+        .eq('id', existingRows[0].id);
+
+      if (updateError) throw updateError;
+    } else {
+      const { error: insertError } = await supabase
+        .from('services_completed')
+        .insert({
+          customer_id: invoice.customer_id,
+          service_type: 'invoice',
+          service_date: invoice.invoice_date,
+          technician_name: invoice.tech_name,
+          summary,
+          pdf_path: pdfUrl,
+          payload,
+          completed_at: new Date().toISOString()
+        });
+
+      if (insertError) throw insertError;
+    }
   };
 
   const generateAndUploadEstimatePdf = async (estimateId: string, shouldDownload = false) => {
@@ -616,11 +664,7 @@ function Estimates() {
       pdfBlob
     });
 
-    await updateServicesCompletedPdf({
-      kind: 'estimate',
-      recordId: typedEstimate.id,
-      pdfUrl: publicUrl
-    });
+    await syncEstimateToServicesCompleted(typedEstimate.id, publicUrl);
 
     if (shouldDownload) {
       doc.save(fileName);
@@ -999,11 +1043,7 @@ function Estimates() {
       pdfBlob
     });
 
-    await updateServicesCompletedPdf({
-      kind: 'invoice',
-      recordId: (invoice as any).id,
-      pdfUrl: publicUrl
-    });
+    await syncInvoiceToServicesCompleted((invoice as any).id, publicUrl);
 
     if (shouldDownload) {
       doc.save(fileName);
@@ -1088,17 +1128,8 @@ function Estimates() {
       if (invoiceLineItemsError) throw invoiceLineItemsError;
     }
 
-    try {
-      await upsertServiceCompletedForInvoice(invoice, totalAmount);
-    } catch (dashboardError) {
-      console.error('Invoice created, but services_completed sync failed:', dashboardError);
-    }
-
-    try {
-      await generateAndUploadInvoicePdfFromEstimate((invoice as any).id, false);
-    } catch (pdfError) {
-      console.error('Invoice created, but PDF generation/upload failed:', pdfError);
-    }
+    await syncInvoiceToServicesCompleted((invoice as any).id, null);
+    await generateAndUploadInvoicePdfFromEstimate((invoice as any).id, false);
 
     return invoice;
   };
@@ -1141,17 +1172,8 @@ function Estimates() {
 
       if (lineItemsError) throw lineItemsError;
 
-      try {
-        await upsertServiceCompletedForEstimate(estimate, totalAmount);
-      } catch (dashboardError) {
-        console.error('Estimate created, but services_completed sync failed:', dashboardError);
-      }
-
-      try {
-        await generateAndUploadEstimatePdf((estimate as any).id, false);
-      } catch (pdfError) {
-        console.error('Estimate created, but PDF generation/upload failed:', pdfError);
-      }
+      await syncEstimateToServicesCompleted((estimate as any).id, null);
+      await generateAndUploadEstimatePdf((estimate as any).id, false);
 
       if ((estimate as any).status === 'approved') {
         await createInvoiceFromEstimate((estimate as any).id);
@@ -1161,9 +1183,9 @@ function Estimates() {
       resetForm();
       await fetchData();
       alert('Estimate created successfully!');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error saving estimate:', error);
-      alert('Failed to create estimate');
+      alert(`Failed to create estimate: ${error?.message || 'Unknown error'}`);
     }
   };
 
@@ -1206,14 +1228,16 @@ function Estimates() {
 
       if (updateError) throw updateError;
 
+      await syncEstimateToServicesCompleted(id, null);
+
       if (newStatus === 'approved' && oldStatus !== 'approved') {
         await createInvoiceFromEstimate(id);
       }
 
       await fetchData();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating status:', error);
-      alert('Failed to update status');
+      alert(`Failed to update status: ${error?.message || 'Unknown error'}`);
     }
   };
 
@@ -1222,9 +1246,9 @@ function Estimates() {
       setPdfBusyId(estimateId);
       await generateAndUploadEstimatePdf(estimateId, true);
       await fetchData();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error generating PDF:', error);
-      alert('Failed to generate PDF');
+      alert(`Failed to generate PDF: ${error?.message || 'Unknown error'}`);
     } finally {
       setPdfBusyId(null);
     }
@@ -1371,7 +1395,7 @@ function Estimates() {
                     <textarea
                       value={item.description}
                       onChange={(e) => handleLineItemChange(index, 'description', e.target.value)}
-                      rows="2"
+                      rows={2}
                       required
                     />
                   </div>
@@ -1434,7 +1458,7 @@ function Estimates() {
                 name="notes"
                 value={formData.notes}
                 onChange={handleInputChange}
-                rows="3"
+                rows={3}
                 placeholder="Enter scope of work..."
               />
             </div>
