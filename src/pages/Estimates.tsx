@@ -116,8 +116,9 @@ function Estimates() {
       let isUnique = false;
 
       while (!isUnique) {
-        const randomNum = Math.floor(Math.random() * 900000) + 100000;
-        newNumber = `EST-${randomNum}`;
+        const stamp = Date.now().toString().slice(-6);
+        const random = Math.floor(Math.random() * 900) + 100;
+        newNumber = `EST-${stamp}${random}`;
 
         const { data, error } = await supabase
           .from('estimates')
@@ -133,8 +134,10 @@ function Estimates() {
       }
 
       setFormData((prev) => ({ ...prev, estimateNumber: newNumber }));
+      return newNumber;
     } catch (error) {
       console.error('Error generating estimate number:', error);
+      throw error;
     }
   };
 
@@ -206,8 +209,9 @@ function Estimates() {
     let newNumber = '';
 
     while (!isUnique) {
-      const randomNum = Math.floor(Math.random() * 900000) + 100000;
-      newNumber = `INV-${randomNum}`;
+      const stamp = Date.now().toString().slice(-6);
+      const random = Math.floor(Math.random() * 900) + 100;
+      newNumber = `INV-${stamp}${random}`;
 
       const { data, error } = await supabase
         .from('crm_invoices')
@@ -1140,25 +1144,53 @@ function Estimates() {
     try {
       const totalAmount = calculateGrandTotal();
 
-      const { data: estimate, error: estimateError } = await supabase
-        .from('estimates')
-        .insert({
-          estimate_number: formData.estimateNumber,
-          customer_id: formData.customerId,
-          estimate_date: formData.estimateDate,
-          expiry_date: formData.expiryDate || null,
-          tech_name: formData.techName,
-          notes: formData.notes,
-          status: formData.status,
-          total_amount: totalAmount
-        })
-        .select()
-        .single();
+      let estimate: any = null;
+      let lastError: any = null;
 
-      if (estimateError) throw estimateError;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const estimateNumber =
+          attempt === 0 && formData.estimateNumber
+            ? formData.estimateNumber
+            : await generateEstimateNumber();
+
+        const { data, error } = await supabase
+          .from('estimates')
+          .insert({
+            estimate_number: estimateNumber,
+            customer_id: formData.customerId,
+            estimate_date: formData.estimateDate,
+            expiry_date: formData.expiryDate || null,
+            tech_name: formData.techName,
+            notes: formData.notes,
+            status: formData.status,
+            total_amount: totalAmount
+          })
+          .select()
+          .single();
+
+        if (!error) {
+          estimate = data;
+          break;
+        }
+
+        lastError = error;
+
+        if (
+          error.code === '23505' &&
+          String(error.message || '').includes('estimates_estimate_number_unique')
+        ) {
+          continue;
+        }
+
+        throw error;
+      }
+
+      if (!estimate) {
+        throw lastError || new Error('Failed to create estimate');
+      }
 
       const lineItemsToInsert = lineItems.map((item, index) => ({
-        estimate_id: (estimate as any).id,
+        estimate_id: estimate.id,
         description: item.description,
         material_cost: parseFloat(item.materialCost) || 0,
         labor_cost: parseFloat(item.laborCost) || 0,
@@ -1172,11 +1204,11 @@ function Estimates() {
 
       if (lineItemsError) throw lineItemsError;
 
-      await syncEstimateToServicesCompleted((estimate as any).id, null);
-      await generateAndUploadEstimatePdf((estimate as any).id, false);
+      await syncEstimateToServicesCompleted(estimate.id, null);
+      await generateAndUploadEstimatePdf(estimate.id, false);
 
-      if ((estimate as any).status === 'approved') {
-        await createInvoiceFromEstimate((estimate as any).id);
+      if (estimate.status === 'approved') {
+        await createInvoiceFromEstimate(estimate.id);
       }
 
       setShowForm(false);
