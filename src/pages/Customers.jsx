@@ -27,7 +27,32 @@ function Customers() {
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      setCustomers(data || []);
+
+      const customerRows = data || [];
+      const customerIds = customerRows.map((customer) => customer.id);
+
+      let profileByCustomerId = new Map();
+      if (customerIds.length > 0) {
+        const { data: profiles, error: profilesError } = await supabase
+          .from('profiles')
+          .select('id, customer_id, customer_membership_id')
+          .in('customer_id', customerIds);
+
+        if (profilesError) throw profilesError;
+
+        profileByCustomerId = new Map((profiles || []).map((profile) => [profile.customer_id, profile]));
+      }
+
+      setCustomers(
+        customerRows.map((customer) => {
+          const linkedProfile = profileByCustomerId.get(customer.id);
+          return {
+            ...customer,
+            linked_profile_id: linkedProfile?.id || null,
+            linked_customer_membership_id: linkedProfile?.customer_membership_id || null
+          };
+        })
+      );
     } catch (error) {
       console.error('Error fetching customers:', error);
     } finally {
@@ -39,20 +64,103 @@ function Customers() {
     return (email || '').trim().toLowerCase();
   };
 
-  const findPortalCustomerIdByEmail = async (email) => {
-    const normalizedEmail = normalizeEmail(email);
+  const findExistingProfile = async ({ profileId, customerId, email }) => {
+    if (profileId) {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id, customer_id, customer_membership_id, email')
+        .eq('id', profileId)
+        .maybeSingle();
 
-    if (!normalizedEmail) return null;
+      if (error) throw error;
+      if (data) return data;
+    }
 
-    const { data, error } = await supabase
-      .from('portal_customers')
-      .select('id, email')
-      .eq('email', normalizedEmail)
-      .maybeSingle();
+    if (customerId) {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id, customer_id, customer_membership_id, email')
+        .eq('customer_id', customerId)
+        .maybeSingle();
 
-    if (error) throw error;
+      if (error) throw error;
+      if (data) return data;
+    }
 
-    return data?.id || null;
+    // Safe fallback only when customer exists but profile link is missing.
+    if (email) {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id, customer_id, customer_membership_id, email')
+        .eq('email', email)
+        .maybeSingle();
+
+      if (error) throw error;
+      if (data) return data;
+    }
+
+    return null;
+  };
+
+  const ensureProfileCustomerLink = async ({ profileId, customerId, email }) => {
+    const existingProfile = await findExistingProfile({ profileId, customerId, email });
+
+    if (existingProfile) {
+      console.log('profile found', {
+        profileId: existingProfile.id,
+        customerId: existingProfile.customer_id,
+        customerMembershipId: existingProfile.customer_membership_id
+      });
+
+      if (existingProfile.customer_id !== customerId) {
+        const { data: updatedProfile, error } = await supabase
+          .from('profiles')
+          .update({ customer_id: customerId })
+          .eq('id', existingProfile.id)
+          .select('id, customer_id, customer_membership_id')
+          .single();
+
+        if (error) throw error;
+
+        console.log('profile.customer_id updated', {
+          profileId: updatedProfile.id,
+          customerId: updatedProfile.customer_id
+        });
+
+        return updatedProfile;
+      }
+
+      return existingProfile;
+    }
+
+    const createPayload = {
+      customer_id: customerId
+    };
+
+    if (email) {
+      createPayload.email = email;
+    }
+
+    const { data: createdProfile, error: insertProfileError } = await supabase
+      .from('profiles')
+      .insert([createPayload])
+      .select('id, customer_id, customer_membership_id')
+      .single();
+
+    if (insertProfileError) throw insertProfileError;
+
+    console.log('profile found or created', {
+      action: 'created',
+      profileId: createdProfile.id,
+      customerId: createdProfile.customer_id
+    });
+
+    console.log('profile.customer_id updated', {
+      profileId: createdProfile.id,
+      customerId: createdProfile.customer_id
+    });
+
+    return createdProfile;
   };
 
   const handleInputChange = (e) => {
@@ -65,33 +173,81 @@ function Customers() {
 
     try {
       const normalizedEmail = normalizeEmail(formData.email);
-      const portalCustomerId = await findPortalCustomerIdByEmail(normalizedEmail);
 
       const payload = {
         name: formData.name.trim(),
         email: normalizedEmail || null,
         phone: formData.phone.trim() || null,
         address: formData.address.trim() || null,
-        notes: formData.notes.trim() || null,
-        portal_customer_id: portalCustomerId
+        notes: formData.notes.trim() || null
       };
 
       if (editingCustomer) {
-        const { error } = await supabase
+        const { data: updatedCustomer, error } = await supabase
           .from('customers')
           .update({
             ...payload,
             updated_at: new Date().toISOString()
           })
-          .eq('id', editingCustomer.id);
+          .eq('id', editingCustomer.id)
+          .select('*')
+          .single();
 
         if (error) throw error;
+
+        const profile = await ensureProfileCustomerLink({
+          profileId: editingCustomer.linked_profile_id,
+          customerId: updatedCustomer.id,
+          email: updatedCustomer.email
+        });
+
+        if (!profile?.customer_membership_id) {
+          console.log('membership created', {
+            skipped: true,
+            reason: 'no membership created in customer flow'
+          });
+        } else {
+          console.log('profile.customer_membership_id updated', {
+            profileId: profile.id,
+            customerMembershipId: profile.customer_membership_id
+          });
+        }
       } else {
-        const { error } = await supabase
+        const { data: createdCustomer, error } = await supabase
           .from('customers')
-          .insert([payload]);
+          .insert([payload])
+          .select('*')
+          .single();
 
         if (error) throw error;
+
+        console.log('customer created', {
+          customerId: createdCustomer.id,
+          email: createdCustomer.email
+        });
+
+        const profile = await ensureProfileCustomerLink({
+          customerId: createdCustomer.id,
+          email: createdCustomer.email
+        });
+
+        console.log('profile found or created', {
+          action: 'found-or-created',
+          profileId: profile.id,
+          customerId: profile.customer_id
+        });
+
+        if (!profile?.customer_membership_id) {
+          console.log('membership created', {
+            skipped: true,
+            reason: 'no membership created in customer flow'
+          });
+        } else {
+          console.log('profile.customer_membership_id updated', {
+            profileId: profile.id,
+            customerMembershipId: profile.customer_membership_id
+          });
+        }
       }
 
       setShowForm(false);
@@ -260,7 +416,7 @@ function Customers() {
                   <td>{customer.email || '-'}</td>
                   <td>{customer.phone || '-'}</td>
                   <td>{customer.address || '-'}</td>
-                  <td>{customer.portal_customer_id || '-'}</td>
+                  <td>{customer.linked_profile_id || '-'}</td>
                   <td>
                     <div className="action-buttons">
                       <button
