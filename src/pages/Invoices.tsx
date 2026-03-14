@@ -208,77 +208,90 @@ function Invoices() {
   };
 
   const syncInvoiceToServicesCompleted = async (
-    invoiceId: string,
-    pdfUrl: string | null = null
-  ) => {
-    const { data: invoiceRow, error: invoiceError } = await supabase
-      .from('crm_invoices')
-      .select('*')
-      .eq('id', invoiceId)
-      .single();
+  invoiceId: string,
+  pdfUrl: string | null = null
+) => {
+  const { data: invoiceRow, error: invoiceError } = await supabase
+    .from('crm_invoices')
+    .select('*')
+    .eq('id', invoiceId)
+    .single();
 
-    if (invoiceError) throw invoiceError;
+  if (invoiceError) throw invoiceError;
 
-    const invoice = invoiceRow as any;
+  const invoice = invoiceRow as any;
 
-    const payload = {
-      kind: 'invoice',
-      invoice_id: invoice.id,
-      invoice_number: invoice.invoice_number,
-      estimate_id: invoice.estimate_id || null,
-      status: invoice.status,
-      total_amount: Number(invoice.total_amount || 0),
-      amount_paid: Number(invoice.amount_paid || 0),
-      amount_due: Number(invoice.amount_due || 0),
-      approved: null,
-      payments: [],
-      pdf_url: pdfUrl
-    };
+  const { data: paymentRows, error: paymentsError } = await supabase
+    .from('payments')
+    .select('*')
+    .eq('invoice_id', invoice.id)
+    .order('payment_date', { ascending: true });
 
-    const summary = `Invoice ${invoice.invoice_number} created. Amount due: $${Number(
-      invoice.total_amount || 0
-    ).toFixed(2)}`;
+  if (paymentsError) throw paymentsError;
 
-    const { data: existingRows, error: existingError } = await supabase
-      .from('services_completed')
-      .select('id')
-      .contains('payload', { kind: 'invoice', invoice_id: invoice.id });
+  const { data: existingRows, error: existingError } = await supabase
+    .from('services_completed')
+    .select('id, payload, pdf_path')
+    .contains('payload', { kind: 'invoice', invoice_id: invoice.id });
 
-    if (existingError) throw existingError;
+  if (existingError) throw existingError;
 
-    if (existingRows && existingRows.length > 0) {
-      const { error: updateError } = await supabase
-        .from('services_completed')
-        .update({
-          customer_id: invoice.customer_id,
-          service_type: 'invoice',
-          service_date: invoice.invoice_date,
-          technician_name: invoice.tech_name,
-          summary,
-          pdf_path: pdfUrl,
-          payload,
-          completed_at: new Date().toISOString()
-        })
-        .eq('id', existingRows[0].id);
+  const existing = existingRows?.[0] ?? null;
+  const existingPayload = (existing?.payload ?? {}) as any;
 
-      if (updateError) throw updateError;
-    } else {
-      const { error: insertError } = await supabase
-        .from('services_completed')
-        .insert({
-          customer_id: invoice.customer_id,
-          service_type: 'invoice',
-          service_date: invoice.invoice_date,
-          technician_name: invoice.tech_name,
-          summary,
-          pdf_path: pdfUrl,
-          payload,
-          completed_at: new Date().toISOString()
-        });
+  const finalPdfUrl =
+    pdfUrl ||
+    existingPayload?.pdf_url ||
+    existing?.pdf_path ||
+    null;
 
-      if (insertError) throw insertError;
-    }
+  const payload = {
+    kind: 'invoice',
+    invoice_id: invoice.id,
+    invoice_number: invoice.invoice_number,
+    estimate_id: invoice.estimate_id || null,
+    status: invoice.status,
+    total_amount: Number(invoice.total_amount || 0),
+    amount_paid: Number(invoice.amount_paid || 0),
+    amount_due: Number(invoice.amount_due || 0),
+    approved:
+      typeof existingPayload?.approved === 'boolean'
+        ? existingPayload.approved
+        : null,
+    payments: paymentRows || [],
+    pdf_url: finalPdfUrl
   };
+
+  const summary = `Invoice ${invoice.invoice_number} ${invoice.status}. Balance due: $${Number(
+    invoice.amount_due || 0
+  ).toFixed(2)}`;
+
+  const mirrorRow = {
+    customer_id: invoice.customer_id,
+    service_type: 'invoice',
+    service_date: invoice.invoice_date,
+    technician_name: invoice.tech_name,
+    summary,
+    pdf_path: finalPdfUrl,
+    payload,
+    completed_at: new Date().toISOString()
+  };
+
+  if (existing?.id) {
+    const { error: updateError } = await supabase
+      .from('services_completed')
+      .update(mirrorRow)
+      .eq('id', existing.id);
+
+    if (updateError) throw updateError;
+  } else {
+    const { error: insertError } = await supabase
+      .from('services_completed')
+      .insert(mirrorRow);
+
+    if (insertError) throw insertError;
+  }
+};
 
   const generateAndUploadInvoicePdf = async (invoiceId: string, shouldDownload = false) => {
     const { data: invoice, error: invErr } = await supabase
@@ -717,22 +730,41 @@ function Invoices() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!window.confirm('Are you sure you want to delete this invoice?')) return;
+const handleDelete = async (id: string) => {
+  if (!window.confirm('Are you sure you want to delete this invoice?')) return;
 
-    try {
-      const { error } = await supabase
-        .from('crm_invoices')
+  try {
+    const { data: mirroredRows, error: mirrorLookupError } = await supabase
+      .from('services_completed')
+      .select('id')
+      .contains('payload', { kind: 'invoice', invoice_id: id });
+
+    if (mirrorLookupError) throw mirrorLookupError;
+
+    if (mirroredRows && mirroredRows.length > 0) {
+      const mirroredIds = mirroredRows.map((row: any) => row.id);
+
+      const { error: mirrorDeleteError } = await supabase
+        .from('services_completed')
         .delete()
-        .eq('id', id);
+        .in('id', mirroredIds);
 
-      if (error) throw error;
-      await fetchData();
-    } catch (error) {
-      console.error('Error deleting invoice:', error);
-      alert('Failed to delete invoice');
+      if (mirrorDeleteError) throw mirrorDeleteError;
     }
-  };
+
+    const { error } = await supabase
+      .from('crm_invoices')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
+
+    await fetchData();
+  } catch (error) {
+    console.error('Error deleting invoice:', error);
+    alert('Failed to delete invoice');
+  }
+};
 
   const handleStatusChange = async (id: string, newStatus: string) => {
     try {
