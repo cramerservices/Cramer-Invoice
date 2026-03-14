@@ -228,76 +228,76 @@ function Estimates() {
 
     return newNumber;
   };
+const syncEstimateToServicesCompleted = async (
+  estimateId: string,
+  pdfUrl: string | null = null
+) => {
+  const { data: estimateRow, error: estimateError } = await supabase
+    .from('estimates')
+    .select('*')
+    .eq('id', estimateId)
+    .single();
 
-  const syncEstimateToServicesCompleted = async (
-    estimateId: string,
-    pdfUrl: string | null = null
-  ) => {
-    const { data: estimateRow, error: estimateError } = await supabase
-      .from('estimates')
-      .select('*')
-      .eq('id', estimateId)
-      .single();
+  if (estimateError) throw estimateError;
 
-    if (estimateError) throw estimateError;
+  const estimate = estimateRow as any;
 
-    const estimate = estimateRow as any;
+  const { data: existingRows, error: existingError } = await supabase
+    .from('services_completed')
+    .select('id, payload, pdf_path')
+    .contains('payload', { kind: 'estimate', estimate_id: estimate.id });
 
-    const payload = {
-      kind: 'estimate',
-      estimate_id: estimate.id,
-      estimate_number: estimate.estimate_number,
-      status: estimate.status,
-      total_amount: Number(estimate.total_amount || 0),
-      approved: estimate.status === 'approved',
-      pdf_url: pdfUrl
-    };
+  if (existingError) throw existingError;
 
-    const summary = `Estimate ${estimate.estimate_number} created for $${Number(
-      estimate.total_amount || 0
-    ).toFixed(2)}`;
+  const existing = existingRows?.[0] ?? null;
+  const existingPayload = (existing?.payload ?? {}) as any;
 
-    const { data: existingRows, error: existingError } = await supabase
-      .from('services_completed')
-      .select('id')
-      .contains('payload', { kind: 'estimate', estimate_id: estimate.id });
+  const finalPdfUrl =
+    pdfUrl ||
+    existingPayload?.pdf_url ||
+    existing?.pdf_path ||
+    null;
 
-    if (existingError) throw existingError;
-
-    if (existingRows && existingRows.length > 0) {
-      const { error: updateError } = await supabase
-        .from('services_completed')
-        .update({
-          customer_id: estimate.customer_id,
-          service_type: 'estimate',
-          service_date: estimate.estimate_date,
-          technician_name: estimate.tech_name,
-          summary,
-          pdf_path: pdfUrl,
-          payload,
-          completed_at: new Date().toISOString()
-        })
-        .eq('id', existingRows[0].id);
-
-      if (updateError) throw updateError;
-    } else {
-      const { error: insertError } = await supabase
-        .from('services_completed')
-        .insert({
-          customer_id: estimate.customer_id,
-          service_type: 'estimate',
-          service_date: estimate.estimate_date,
-          technician_name: estimate.tech_name,
-          summary,
-          pdf_path: pdfUrl,
-          payload,
-          completed_at: new Date().toISOString()
-        });
-
-      if (insertError) throw insertError;
-    }
+  const payload = {
+    kind: 'estimate',
+    estimate_id: estimate.id,
+    estimate_number: estimate.estimate_number,
+    status: estimate.status,
+    total_amount: Number(estimate.total_amount || 0),
+    approved: estimate.status === 'approved',
+    pdf_url: finalPdfUrl
   };
 
+  const summary = `Estimate ${estimate.estimate_number} ${estimate.status} for $${Number(
+    estimate.total_amount || 0
+  ).toFixed(2)}`;
+
+  const mirrorRow = {
+    customer_id: estimate.customer_id,
+    service_type: 'estimate',
+    service_date: estimate.estimate_date,
+    technician_name: estimate.tech_name,
+    summary,
+    pdf_path: finalPdfUrl,
+    payload,
+    completed_at: new Date().toISOString()
+  };
+
+  if (existing?.id) {
+    const { error: updateError } = await supabase
+      .from('services_completed')
+      .update(mirrorRow)
+      .eq('id', existing.id);
+
+    if (updateError) throw updateError;
+  } else {
+    const { error: insertError } = await supabase
+      .from('services_completed')
+      .insert(mirrorRow);
+
+    if (insertError) throw insertError;
+  }
+};
   const syncInvoiceToServicesCompleted = async (
     invoiceId: string,
     pdfUrl: string | null = null
@@ -1221,22 +1221,41 @@ function Estimates() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!window.confirm('Are you sure you want to delete this estimate?')) return;
+const handleDelete = async (id: string) => {
+  if (!window.confirm('Are you sure you want to delete this estimate?')) return;
 
-    try {
-      const { error } = await supabase
-        .from('estimates')
+  try {
+    const { data: mirroredRows, error: mirrorLookupError } = await supabase
+      .from('services_completed')
+      .select('id')
+      .contains('payload', { kind: 'estimate', estimate_id: id });
+
+    if (mirrorLookupError) throw mirrorLookupError;
+
+    if (mirroredRows && mirroredRows.length > 0) {
+      const mirroredIds = mirroredRows.map((row: any) => row.id);
+
+      const { error: mirrorDeleteError } = await supabase
+        .from('services_completed')
         .delete()
-        .eq('id', id);
+        .in('id', mirroredIds);
 
-      if (error) throw error;
-      await fetchData();
-    } catch (error) {
-      console.error('Error deleting estimate:', error);
-      alert('Failed to delete estimate');
+      if (mirrorDeleteError) throw mirrorDeleteError;
     }
-  };
+
+    const { error } = await supabase
+      .from('estimates')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
+
+    await fetchData();
+  } catch (error) {
+    console.error('Error deleting estimate:', error);
+    alert('Failed to delete estimate');
+  }
+};
 
   const handleStatusChange = async (id: string, newStatus: string) => {
     try {
