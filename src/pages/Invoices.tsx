@@ -11,7 +11,7 @@ const COMPANY = {
 };
 
 const LOGO_URL = `${import.meta.env.BASE_URL}CramerLogoText.png`;
-const PDF_BUCKET = 'service-docs';
+const PDF_BUCKET = 'service-docs'; 
 
 async function fetchImageAsDataURL(url: string) {
   const res = await fetch(url, { cache: 'no-store' });
