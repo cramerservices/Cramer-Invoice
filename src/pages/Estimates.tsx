@@ -245,7 +245,8 @@ const syncEstimateToServicesCompleted = async (
   const { data: existingRows, error: existingError } = await supabase
     .from('services_completed')
     .select('id, payload, pdf_path')
-    .contains('payload', { kind: 'estimate', estimate_id: estimate.id });
+    .eq('estimate_id', estimate.id)
+    .limit(1);
 
   if (existingError) throw existingError;
 
@@ -274,6 +275,8 @@ const syncEstimateToServicesCompleted = async (
 
   const mirrorRow = {
     customer_id: estimate.customer_id,
+    estimate_id: estimate.id,
+    invoice_id: null,
     service_type: 'estimate',
     service_date: estimate.estimate_date,
     technician_name: estimate.tech_name,
@@ -1225,23 +1228,12 @@ const handleDelete = async (id: string) => {
   if (!window.confirm('Are you sure you want to delete this estimate?')) return;
 
   try {
-    const { data: mirroredRows, error: mirrorLookupError } = await supabase
+    const { error: mirrorDeleteError } = await supabase
       .from('services_completed')
-      .select('id')
-      .contains('payload', { kind: 'estimate', estimate_id: id });
+      .delete()
+      .eq('estimate_id', id);
 
-    if (mirrorLookupError) throw mirrorLookupError;
-
-    if (mirroredRows && mirroredRows.length > 0) {
-      const mirroredIds = mirroredRows.map((row: any) => row.id);
-
-      const { error: mirrorDeleteError } = await supabase
-        .from('services_completed')
-        .delete()
-        .in('id', mirroredIds);
-
-      if (mirrorDeleteError) throw mirrorDeleteError;
-    }
+    if (mirrorDeleteError) throw mirrorDeleteError;
 
     const { error } = await supabase
       .from('estimates')
@@ -1255,6 +1247,7 @@ const handleDelete = async (id: string) => {
     console.error('Error deleting estimate:', error);
     alert('Failed to delete estimate');
   }
+};
 };
   const handleStatusChange = async (id: string, newStatus: string) => {
     try {
