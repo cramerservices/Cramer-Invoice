@@ -1248,7 +1248,7 @@ const handleDelete = async (id: string) => {
     alert('Failed to delete estimate');
   }
 };
-};
+
   const handleStatusChange = async (id: string, newStatus: string) => {
     try {
       const { data: currentEstimate, error: currentEstimateError } = await supabase
