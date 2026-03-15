@@ -207,7 +207,7 @@ function Invoices() {
     return lineItems.reduce((sum, item) => sum + calculateLineTotal(item), 0);
   };
 
-  const syncInvoiceToServicesCompleted = async (
+const syncInvoiceToServicesCompleted = async (
   invoiceId: string,
   pdfUrl: string | null = null
 ) => {
@@ -232,7 +232,8 @@ function Invoices() {
   const { data: existingRows, error: existingError } = await supabase
     .from('services_completed')
     .select('id, payload, pdf_path')
-    .contains('payload', { kind: 'invoice', invoice_id: invoice.id });
+    .eq('invoice_id', invoice.id)
+    .limit(1);
 
   if (existingError) throw existingError;
 
@@ -268,6 +269,8 @@ function Invoices() {
 
   const mirrorRow = {
     customer_id: invoice.customer_id,
+    estimate_id: invoice.estimate_id || null,
+    invoice_id: invoice.id,
     service_type: 'invoice',
     service_date: invoice.invoice_date,
     technician_name: invoice.tech_name,
@@ -292,7 +295,6 @@ function Invoices() {
     if (insertError) throw insertError;
   }
 };
-
   const generateAndUploadInvoicePdf = async (invoiceId: string, shouldDownload = false) => {
     const { data: invoice, error: invErr } = await supabase
       .from('crm_invoices')
@@ -734,23 +736,12 @@ const handleDelete = async (id: string) => {
   if (!window.confirm('Are you sure you want to delete this invoice?')) return;
 
   try {
-    const { data: mirroredRows, error: mirrorLookupError } = await supabase
+    const { error: mirrorDeleteError } = await supabase
       .from('services_completed')
-      .select('id')
-      .contains('payload', { kind: 'invoice', invoice_id: id });
+      .delete()
+      .eq('invoice_id', id);
 
-    if (mirrorLookupError) throw mirrorLookupError;
-
-    if (mirroredRows && mirroredRows.length > 0) {
-      const mirroredIds = mirroredRows.map((row: any) => row.id);
-
-      const { error: mirrorDeleteError } = await supabase
-        .from('services_completed')
-        .delete()
-        .in('id', mirroredIds);
-
-      if (mirrorDeleteError) throw mirrorDeleteError;
-    }
+    if (mirrorDeleteError) throw mirrorDeleteError;
 
     const { error } = await supabase
       .from('crm_invoices')
