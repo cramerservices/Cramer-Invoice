@@ -757,7 +757,7 @@ const handleDelete = async (id: string) => {
   }
 };
   const handleStatusChange = async (id: string, newStatus: string) => {
-    try {
+    try { 
       const { error } = await supabase
         .from('crm_invoices')
         .update({
