@@ -765,7 +765,6 @@ const handleDelete = async (id: string) => {
     alert('Failed to delete invoice');
   }
 };
-
   const handleStatusChange = async (id: string, newStatus: string) => {
     try {
       const { error } = await supabase
