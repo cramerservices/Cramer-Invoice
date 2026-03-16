@@ -246,39 +246,39 @@ const syncInvoiceToServicesCompleted = async (
     existing?.pdf_path ||
     null;
 
-  const payload = {
-    kind: 'invoice',
-    invoice_id: invoice.id,
-    invoice_number: invoice.invoice_number,
-    estimate_id: invoice.estimate_id || null,
-    status: invoice.status,
-    total_amount: Number(invoice.total_amount || 0),
-    amount_paid: Number(invoice.amount_paid || 0),
-    amount_due: Number(invoice.amount_due || 0),
-    approved:
-      typeof existingPayload?.approved === 'boolean'
-        ? existingPayload.approved
-        : null,
-    payments: paymentRows || [],
-    pdf_url: finalPdfUrl
-  };
+const payload = {
+  kind: 'invoice',
+  invoice_id: invoice.id,
+  invoice_number: invoice.invoice_number,
+  estimate_id: invoice.estimate_id || null,
+  status: invoice.status,
+  total_amount: Number(invoice.total_amount || 0),
+  amount_paid: Number(invoice.amount_paid || 0),
+  amount_due: Number(invoice.amount_due || 0),
+  approved:
+    typeof existingPayload?.approved === 'boolean'
+      ? existingPayload.approved
+      : null,
+  payments: paymentRows || [],
+  pdf_url: finalPdfUrl
+};
 
   const summary = `Invoice ${invoice.invoice_number} ${invoice.status}. Balance due: $${Number(
     invoice.amount_due || 0
   ).toFixed(2)}`;
 
   const mirrorRow = {
-    customer_id: invoice.customer_id,
-    estimate_id: invoice.estimate_id || null,
-    invoice_id: invoice.id,
-    service_type: 'invoice',
-    service_date: invoice.invoice_date,
-    technician_name: invoice.tech_name,
-    summary,
-    pdf_path: finalPdfUrl,
-    payload,
-    completed_at: new Date().toISOString()
-  };
+  customer_id: invoice.customer_id,
+  estimate_id: null,
+  invoice_id: invoice.id,
+  service_type: 'invoice',
+  service_date: invoice.invoice_date,
+  technician_name: invoice.tech_name,
+  summary,
+  pdf_path: finalPdfUrl,
+  payload,
+  completed_at: new Date().toISOString()
+};
 
   if (existing?.id) {
     const { error: updateError } = await supabase
