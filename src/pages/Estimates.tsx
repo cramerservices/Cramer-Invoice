@@ -242,20 +242,22 @@ const syncEstimateToServicesCompleted = async (
 
   const estimate = estimateRow as any;
 
-  const { data: existingRow, error: existingError } = await supabase
+  // Find ANY existing mirror row for this estimate
+  const { data: existingRows, error: existingError } = await supabase
     .from('services_completed')
-    .select('payload, pdf_path')
+    .select('id, payload, pdf_path, invoice_id, service_type, created_at')
     .eq('estimate_id', estimate.id)
-    .maybeSingle();
+    .order('created_at', { ascending: false });
 
   if (existingError) throw existingError;
 
-  const existingPayload = (existingRow?.payload ?? {}) as any;
+  const existing = existingRows?.[0] ?? null;
+  const existingPayload = (existing?.payload ?? {}) as any;
 
   const finalPdfUrl =
     pdfUrl ||
     existingPayload?.pdf_url ||
-    existingRow?.pdf_path ||
+    existing?.pdf_path ||
     null;
 
   const payload = {
@@ -285,11 +287,32 @@ const syncEstimateToServicesCompleted = async (
     completed_at: new Date().toISOString()
   };
 
-  const { error: upsertError } = await supabase
-    .from('services_completed')
-    .upsert(mirrorRow, { onConflict: 'estimate_id' });
+  if (existing?.id) {
+    const { error: updateError } = await supabase
+      .from('services_completed')
+      .update(mirrorRow)
+      .eq('id', existing.id);
 
-  if (upsertError) throw upsertError;
+    if (updateError) throw updateError;
+
+    // Optional cleanup if bad duplicate rows already exist
+    if (existingRows.length > 1) {
+      const duplicateIds = existingRows.slice(1).map((row) => row.id);
+
+      const { error: deleteDupesError } = await supabase
+        .from('services_completed')
+        .delete()
+        .in('id', duplicateIds);
+
+      if (deleteDupesError) throw deleteDupesError;
+    }
+  } else {
+    const { error: insertError } = await supabase
+      .from('services_completed')
+      .insert(mirrorRow);
+
+    if (insertError) throw insertError;
+  }
 };
   const syncInvoiceToServicesCompleted = async (
     invoiceId: string,
