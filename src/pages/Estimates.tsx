@@ -242,12 +242,13 @@ const syncEstimateToServicesCompleted = async (
 
   const estimate = estimateRow as any;
 
-  // optional read only for keeping existing pdf if one already exists
-  const { data: existingRow } = await supabase
+  const { data: existingRow, error: existingError } = await supabase
     .from('services_completed')
     .select('id, payload, pdf_path')
     .eq('estimate_id', estimate.id)
     .maybeSingle();
+
+  if (existingError) throw existingError;
 
   const existingPayload = (existingRow?.payload ?? {}) as any;
 
@@ -284,7 +285,7 @@ const syncEstimateToServicesCompleted = async (
     completed_at: new Date().toISOString()
   };
 
-  // 1) try update first
+  // update first
   const { data: updatedRows, error: updateError } = await supabase
     .from('services_completed')
     .update(mirrorRow)
@@ -293,17 +294,15 @@ const syncEstimateToServicesCompleted = async (
 
   if (updateError) throw updateError;
 
-  if (updatedRows && updatedRows.length > 0) {
-    return;
-  }
+  if (updatedRows && updatedRows.length > 0) return;
 
-  // 2) no row updated, try insert
+  // insert if no row exists
   const { error: insertError } = await supabase
     .from('services_completed')
     .insert(mirrorRow);
 
-  // 3) if another row already exists, retry update
   if (insertError) {
+    // retry update if another process inserted first
     if (insertError.code === '23505') {
       const { error: retryUpdateError } = await supabase
         .from('services_completed')
@@ -316,8 +315,7 @@ const syncEstimateToServicesCompleted = async (
 
     throw insertError;
   }
-};
-  const syncInvoiceToServicesCompleted = async (
+};  const syncInvoiceToServicesCompleted = async (
     invoiceId: string,
     pdfUrl: string | null = null
   ) => {
