@@ -242,22 +242,19 @@ const syncEstimateToServicesCompleted = async (
 
   const estimate = estimateRow as any;
 
-  // Find ANY existing mirror row for this estimate
-  const { data: existingRows, error: existingError } = await supabase
+  // optional read only for keeping existing pdf if one already exists
+  const { data: existingRow } = await supabase
     .from('services_completed')
-    .select('id, payload, pdf_path, invoice_id, service_type, created_at')
+    .select('id, payload, pdf_path')
     .eq('estimate_id', estimate.id)
-    .order('created_at', { ascending: false });
+    .maybeSingle();
 
-  if (existingError) throw existingError;
-
-  const existing = existingRows?.[0] ?? null;
-  const existingPayload = (existing?.payload ?? {}) as any;
+  const existingPayload = (existingRow?.payload ?? {}) as any;
 
   const finalPdfUrl =
     pdfUrl ||
     existingPayload?.pdf_url ||
-    existing?.pdf_path ||
+    existingRow?.pdf_path ||
     null;
 
   const payload = {
@@ -287,31 +284,37 @@ const syncEstimateToServicesCompleted = async (
     completed_at: new Date().toISOString()
   };
 
-  if (existing?.id) {
-    const { error: updateError } = await supabase
-      .from('services_completed')
-      .update(mirrorRow)
-      .eq('id', existing.id);
+  // 1) try update first
+  const { data: updatedRows, error: updateError } = await supabase
+    .from('services_completed')
+    .update(mirrorRow)
+    .eq('estimate_id', estimate.id)
+    .select('id');
 
-    if (updateError) throw updateError;
+  if (updateError) throw updateError;
 
-    // Optional cleanup if bad duplicate rows already exist
-    if (existingRows.length > 1) {
-      const duplicateIds = existingRows.slice(1).map((row) => row.id);
+  if (updatedRows && updatedRows.length > 0) {
+    return;
+  }
 
-      const { error: deleteDupesError } = await supabase
+  // 2) no row updated, try insert
+  const { error: insertError } = await supabase
+    .from('services_completed')
+    .insert(mirrorRow);
+
+  // 3) if another row already exists, retry update
+  if (insertError) {
+    if (insertError.code === '23505') {
+      const { error: retryUpdateError } = await supabase
         .from('services_completed')
-        .delete()
-        .in('id', duplicateIds);
+        .update(mirrorRow)
+        .eq('estimate_id', estimate.id);
 
-      if (deleteDupesError) throw deleteDupesError;
+      if (retryUpdateError) throw retryUpdateError;
+      return;
     }
-  } else {
-    const { error: insertError } = await supabase
-      .from('services_completed')
-      .insert(mirrorRow);
 
-    if (insertError) throw insertError;
+    throw insertError;
   }
 };
   const syncInvoiceToServicesCompleted = async (
