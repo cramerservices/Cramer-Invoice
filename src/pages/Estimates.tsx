@@ -228,24 +228,24 @@ function Estimates() {
 
     return newNumber;
   };
-const syncEstimateToServicesCompleted = async (
-  estimateId: string,
+const syncInvoiceToServicesCompleted = async (
+  invoiceId: string,
   pdfUrl: string | null = null
 ) => {
-  const { data: estimateRow, error: estimateError } = await supabase
-    .from('estimates')
+  const { data: invoiceRow, error: invoiceError } = await supabase
+    .from('crm_invoices')
     .select('*')
-    .eq('id', estimateId)
+    .eq('id', invoiceId)
     .single();
 
-  if (estimateError) throw estimateError;
+  if (invoiceError) throw invoiceError;
 
-  const estimate = estimateRow as any;
+  const invoice = invoiceRow as any;
 
   const { data: existingRows, error: existingError } = await supabase
     .from('services_completed')
     .select('id, payload, pdf_path')
-    .eq('estimate_id', estimate.id)
+    .eq('invoice_id', invoice.id)
     .limit(1);
 
   if (existingError) throw existingError;
@@ -260,26 +260,30 @@ const syncEstimateToServicesCompleted = async (
     null;
 
   const payload = {
-    kind: 'estimate',
-    estimate_id: estimate.id,
-    estimate_number: estimate.estimate_number,
-    status: estimate.status,
-    total_amount: Number(estimate.total_amount || 0),
-    approved: estimate.status === 'approved',
+    kind: 'invoice',
+    invoice_id: invoice.id,
+    invoice_number: invoice.invoice_number,
+    estimate_id: invoice.estimate_id || null,
+    status: invoice.status,
+    total_amount: Number(invoice.total_amount || 0),
+    amount_paid: Number(invoice.amount_paid || 0),
+    amount_due: Number(invoice.amount_due || 0),
+    approved: null,
+    payments: [],
     pdf_url: finalPdfUrl
   };
 
-  const summary = `Estimate ${estimate.estimate_number} ${estimate.status} for $${Number(
-    estimate.total_amount || 0
+  const summary = `Invoice ${invoice.invoice_number} ${invoice.status}. Balance due: $${Number(
+    invoice.amount_due || 0
   ).toFixed(2)}`;
 
   const mirrorRow = {
-    customer_id: estimate.customer_id,
-    estimate_id: estimate.id,
-    invoice_id: null,
-    service_type: 'estimate',
-    service_date: estimate.estimate_date,
-    technician_name: estimate.tech_name,
+    customer_id: invoice.customer_id,
+    estimate_id: invoice.estimate_id || null,
+    invoice_id: invoice.id,
+    service_type: 'invoice',
+    service_date: invoice.invoice_date,
+    technician_name: invoice.tech_name,
     summary,
     pdf_path: finalPdfUrl,
     payload,
