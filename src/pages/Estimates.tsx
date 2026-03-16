@@ -9,7 +9,7 @@ const COMPANY = {
   email: 'cramerservicesllc@gmail.com',
   website: 'www.cramerservicesllc.com'
 };
- 
+
 const LOGO_URL = `${import.meta.env.BASE_URL}CramerLogoText.png`;
 const PDF_BUCKET = 'service-docs';
 
@@ -228,24 +228,24 @@ function Estimates() {
 
     return newNumber;
   };
-const syncInvoiceToServicesCompleted = async (
-  invoiceId: string,
+const syncEstimateToServicesCompleted = async (
+  estimateId: string,
   pdfUrl: string | null = null
 ) => {
-  const { data: invoiceRow, error: invoiceError } = await supabase
-    .from('crm_invoices')
+  const { data: estimateRow, error: estimateError } = await supabase
+    .from('estimates')
     .select('*')
-    .eq('id', invoiceId)
+    .eq('id', estimateId)
     .single();
 
-  if (invoiceError) throw invoiceError;
+  if (estimateError) throw estimateError;
 
-  const invoice = invoiceRow as any;
+  const estimate = estimateRow as any;
 
   const { data: existingRows, error: existingError } = await supabase
     .from('services_completed')
     .select('id, payload, pdf_path')
-    .eq('invoice_id', invoice.id)
+    .eq('estimate_id', estimate.id)
     .limit(1);
 
   if (existingError) throw existingError;
@@ -260,30 +260,26 @@ const syncInvoiceToServicesCompleted = async (
     null;
 
   const payload = {
-    kind: 'invoice',
-    invoice_id: invoice.id,
-    invoice_number: invoice.invoice_number,
-    estimate_id: invoice.estimate_id || null,
-    status: invoice.status,
-    total_amount: Number(invoice.total_amount || 0),
-    amount_paid: Number(invoice.amount_paid || 0),
-    amount_due: Number(invoice.amount_due || 0),
-    approved: null,
-    payments: [],
+    kind: 'estimate',
+    estimate_id: estimate.id,
+    estimate_number: estimate.estimate_number,
+    status: estimate.status,
+    total_amount: Number(estimate.total_amount || 0),
+    approved: estimate.status === 'approved',
     pdf_url: finalPdfUrl
   };
 
-  const summary = `Invoice ${invoice.invoice_number} ${invoice.status}. Balance due: $${Number(
-    invoice.amount_due || 0
+  const summary = `Estimate ${estimate.estimate_number} ${estimate.status} for $${Number(
+    estimate.total_amount || 0
   ).toFixed(2)}`;
 
   const mirrorRow = {
-    customer_id: invoice.customer_id,
-    estimate_id: invoice.estimate_id || null,
-    invoice_id: invoice.id,
-    service_type: 'invoice',
-    service_date: invoice.invoice_date,
-    technician_name: invoice.tech_name,
+    customer_id: estimate.customer_id,
+    estimate_id: estimate.id,
+    invoice_id: null,
+    service_type: 'estimate',
+    service_date: estimate.estimate_date,
+    technician_name: estimate.tech_name,
     summary,
     pdf_path: finalPdfUrl,
     payload,
