@@ -242,23 +242,20 @@ const syncEstimateToServicesCompleted = async (
 
   const estimate = estimateRow as any;
 
-  const { data: existingRows, error: existingError } = await supabase
+  const { data: existingRow, error: existingError } = await supabase
     .from('services_completed')
-    .select('id, payload, pdf_path, invoice_id, service_type')
+    .select('payload, pdf_path')
     .eq('estimate_id', estimate.id)
-    .eq('service_type', 'estimate')
-    .is('invoice_id', null)
-    .limit(1);
+    .maybeSingle();
 
   if (existingError) throw existingError;
 
-  const existing = existingRows?.[0] ?? null;
-  const existingPayload = (existing?.payload ?? {}) as any;
+  const existingPayload = (existingRow?.payload ?? {}) as any;
 
   const finalPdfUrl =
     pdfUrl ||
     existingPayload?.pdf_url ||
-    existing?.pdf_path ||
+    existingRow?.pdf_path ||
     null;
 
   const payload = {
@@ -288,20 +285,11 @@ const syncEstimateToServicesCompleted = async (
     completed_at: new Date().toISOString()
   };
 
-  if (existing?.id) {
-    const { error: updateError } = await supabase
-      .from('services_completed')
-      .update(mirrorRow)
-      .eq('id', existing.id);
+  const { error: upsertError } = await supabase
+    .from('services_completed')
+    .upsert(mirrorRow, { onConflict: 'estimate_id' });
 
-    if (updateError) throw updateError;
-  } else {
-    const { error: insertError } = await supabase
-      .from('services_completed')
-      .insert(mirrorRow);
-
-    if (insertError) throw insertError;
-  }
+  if (upsertError) throw upsertError;
 };
   const syncInvoiceToServicesCompleted = async (
     invoiceId: string,
