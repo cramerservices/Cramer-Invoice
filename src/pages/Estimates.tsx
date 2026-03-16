@@ -244,8 +244,10 @@ const syncEstimateToServicesCompleted = async (
 
   const { data: existingRows, error: existingError } = await supabase
     .from('services_completed')
-    .select('id, payload, pdf_path')
+    .select('id, payload, pdf_path, invoice_id, service_type')
     .eq('estimate_id', estimate.id)
+    .eq('service_type', 'estimate')
+    .is('invoice_id', null)
     .limit(1);
 
   if (existingError) throw existingError;
