@@ -229,70 +229,82 @@ const syncInvoiceToServicesCompleted = async (
 
   if (paymentsError) throw paymentsError;
 
-  const { data: existingRows, error: existingError } = await supabase
+  const { data: existingRow, error: existingError } = await supabase
     .from('services_completed')
     .select('id, payload, pdf_path')
     .eq('invoice_id', invoice.id)
-    .limit(1);
+    .maybeSingle();
 
   if (existingError) throw existingError;
 
-  const existing = existingRows?.[0] ?? null;
-  const existingPayload = (existing?.payload ?? {}) as any;
+  const existingPayload = (existingRow?.payload ?? {}) as any;
 
   const finalPdfUrl =
     pdfUrl ||
     existingPayload?.pdf_url ||
-    existing?.pdf_path ||
+    existingRow?.pdf_path ||
     null;
 
-const payload = {
-  kind: 'invoice',
-  invoice_id: invoice.id,
-  invoice_number: invoice.invoice_number,
-  estimate_id: invoice.estimate_id || null,
-  status: invoice.status,
-  total_amount: Number(invoice.total_amount || 0),
-  amount_paid: Number(invoice.amount_paid || 0),
-  amount_due: Number(invoice.amount_due || 0),
-  approved:
-    typeof existingPayload?.approved === 'boolean'
-      ? existingPayload.approved
-      : null,
-  payments: paymentRows || [],
-  pdf_url: finalPdfUrl
-};
+  const payload = {
+    kind: 'invoice',
+    invoice_id: invoice.id,
+    invoice_number: invoice.invoice_number,
+    estimate_id: invoice.estimate_id || null,
+    status: invoice.status,
+    total_amount: Number(invoice.total_amount || 0),
+    amount_paid: Number(invoice.amount_paid || 0),
+    amount_due: Number(invoice.amount_due || 0),
+    approved:
+      typeof existingPayload?.approved === 'boolean'
+        ? existingPayload.approved
+        : null,
+    payments: paymentRows || [],
+    pdf_url: finalPdfUrl
+  };
 
   const summary = `Invoice ${invoice.invoice_number} ${invoice.status}. Balance due: $${Number(
     invoice.amount_due || 0
   ).toFixed(2)}`;
 
   const mirrorRow = {
-  customer_id: invoice.customer_id,
-  estimate_id: null,
-  invoice_id: invoice.id,
-  service_type: 'invoice',
-  service_date: invoice.invoice_date,
-  technician_name: invoice.tech_name,
-  summary,
-  pdf_path: finalPdfUrl,
-  payload,
-  completed_at: new Date().toISOString()
-};
+    customer_id: invoice.customer_id,
+    estimate_id: null, // IMPORTANT
+    invoice_id: invoice.id,
+    service_type: 'invoice',
+    service_date: invoice.invoice_date,
+    technician_name: invoice.tech_name,
+    summary,
+    pdf_path: finalPdfUrl,
+    payload,
+    completed_at: new Date().toISOString()
+  };
 
-  if (existing?.id) {
-    const { error: updateError } = await supabase
-      .from('services_completed')
-      .update(mirrorRow)
-      .eq('id', existing.id);
+  const { data: updatedRows, error: updateError } = await supabase
+    .from('services_completed')
+    .update(mirrorRow)
+    .eq('invoice_id', invoice.id)
+    .select('id');
 
-    if (updateError) throw updateError;
-  } else {
-    const { error: insertError } = await supabase
-      .from('services_completed')
-      .insert(mirrorRow);
+  if (updateError) throw updateError;
 
-    if (insertError) throw insertError;
+  if (updatedRows && updatedRows.length > 0) return;
+
+  const { error: insertError } = await supabase
+    .from('services_completed')
+    .insert(mirrorRow);
+
+  if (insertError) {
+    if (insertError.code === '23505') {
+      const { error: retryUpdateError } = await supabase
+        .from('services_completed')
+        .update(mirrorRow)
+        .eq('invoice_id', invoice.id);
+
+      if (retryUpdateError) throw retryUpdateError;
+      return;
+    }
+
+    throw insertError;
   }
 };
   const generateAndUploadInvoicePdf = async (invoiceId: string, shouldDownload = false) => {
