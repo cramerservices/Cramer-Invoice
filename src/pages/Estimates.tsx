@@ -1224,9 +1224,9 @@ const syncEstimateToServicesCompleted = async (
       await syncEstimateToServicesCompleted(estimate.id, null);
       await generateAndUploadEstimatePdf(estimate.id, false);
 
-      if (estimate.status === 'approved') {
-        await createInvoiceFromEstimate(estimate.id);
-      }
+  if (estimate.status === 'job_complete') {
+  await createInvoiceFromEstimate(estimate.id);
+}
 
       setShowForm(false);
       resetForm();
@@ -1287,9 +1287,9 @@ const handleDelete = async (id: string) => {
 
       await syncEstimateToServicesCompleted(id, null);
 
-      if (newStatus === 'approved' && oldStatus !== 'approved') {
-        await createInvoiceFromEstimate(id);
-      }
+    if (newStatus === 'job_complete' && oldStatus !== 'job_complete') {
+  await createInvoiceFromEstimate(id);
+}
 
       await fetchData();
     } catch (error: any) {
@@ -1412,11 +1412,12 @@ const handleDelete = async (id: string) => {
                   onChange={handleInputChange}
                   required
                 >
-                  <option value="draft">Draft</option>
-                  <option value="sent">Sent</option>
-                  <option value="approved">Approved</option>
-                  <option value="rejected">Rejected</option>
-                  <option value="expired">Expired</option>
+                <option value="draft">Draft</option>
+<option value="sent">Sent</option>
+<option value="approved">Approved</option>
+<option value="rejected">Rejected</option>
+<option value="expired">Expired</option>
+<option value="job_complete">Job Complete</option>
                 </select>
               </div>
             </div>
@@ -1587,11 +1588,12 @@ const handleDelete = async (id: string) => {
                       className={`status-badge status-${estimate.status}`}
                       style={{ border: 'none', cursor: 'pointer' }}
                     >
-                      <option value="draft">Draft</option>
-                      <option value="sent">Sent</option>
-                      <option value="approved">Approved</option>
-                      <option value="rejected">Rejected</option>
-                      <option value="expired">Expired</option>
+                    <option value="draft">Draft</option>
+<option value="sent">Sent</option>
+<option value="approved">Approved</option>
+<option value="rejected">Rejected</option>
+<option value="expired">Expired</option>
+<option value="job_complete">Job Complete</option>
                     </select>
                   </td>
                   <td>
