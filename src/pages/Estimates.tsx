@@ -1149,8 +1149,8 @@ const syncEstimateToServicesCompleted = async (
       if (invoiceLineItemsError) throw invoiceLineItemsError;
     }
 
-    await syncInvoiceToServicesCompleted((invoice as any).id, null);
-    await generateAndUploadInvoicePdfFromEstimate((invoice as any).id, false);
+const invoicePdfUrl = await generateAndUploadInvoicePdfFromEstimate((invoice as any).id, false);
+await syncInvoiceToServicesCompleted((invoice as any).id, invoicePdfUrl);
 
     return invoice;
   };
