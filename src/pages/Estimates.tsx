@@ -315,78 +315,100 @@ const syncEstimateToServicesCompleted = async (
 
     throw insertError;
   }
-};  const syncInvoiceToServicesCompleted = async (
-    invoiceId: string,
-    pdfUrl: string | null = null
-  ) => {
-    const { data: invoiceRow, error: invoiceError } = await supabase
-      .from('crm_invoices')
-      .select('*')
-      .eq('id', invoiceId)
-      .single();
+};
+const syncInvoiceToServicesCompleted = async (
+  invoiceId: string,
+  pdfUrl: string | null = null
+) => {
+  const { data: invoiceRow, error: invoiceError } = await supabase
+    .from('crm_invoices')
+    .select('*')
+    .eq('id', invoiceId)
+    .single();
 
-    if (invoiceError) throw invoiceError;
+  if (invoiceError) throw invoiceError;
 
-    const invoice = invoiceRow as any;
+  const invoice = invoiceRow as any;
 
-    const payload = {
-      kind: 'invoice',
-      invoice_id: invoice.id,
-      invoice_number: invoice.invoice_number,
-      estimate_id: invoice.estimate_id || null,
-      status: invoice.status,
-      total_amount: Number(invoice.total_amount || 0),
-      amount_paid: Number(invoice.amount_paid || 0),
-      amount_due: Number(invoice.amount_due || 0),
-      approved: null,
-      payments: [],
-      pdf_url: pdfUrl
-    };
+  // first try to find by top-level invoice_id
+  let { data: existingRow, error: existingError } = await supabase
+    .from('services_completed')
+    .select('id, payload, pdf_path, invoice_id')
+    .eq('invoice_id', invoice.id)
+    .maybeSingle();
 
-    const summary = `Invoice ${invoice.invoice_number} created. Amount due: $${Number(
-      invoice.total_amount || 0
-    ).toFixed(2)}`;
+  if (existingError) throw existingError;
 
-    const { data: existingRows, error: existingError } = await supabase
+  // fallback: older rows that only stored invoice_id inside payload
+  if (!existingRow) {
+    const { data: payloadRows, error: payloadError } = await supabase
       .from('services_completed')
-      .select('id')
+      .select('id, payload, pdf_path, invoice_id')
       .contains('payload', { kind: 'invoice', invoice_id: invoice.id });
 
-    if (existingError) throw existingError;
+    if (payloadError) throw payloadError;
 
-    if (existingRows && existingRows.length > 0) {
-      const { error: updateError } = await supabase
-        .from('services_completed')
-        .update({
-          customer_id: invoice.customer_id,
-          service_type: 'invoice',
-          service_date: invoice.invoice_date,
-          technician_name: invoice.tech_name,
-          summary,
-          pdf_path: pdfUrl,
-          payload,
-          completed_at: new Date().toISOString()
-        })
-        .eq('id', existingRows[0].id);
+    existingRow = payloadRows?.[0] ?? null;
+  }
 
-      if (updateError) throw updateError;
-    } else {
-      const { error: insertError } = await supabase
-        .from('services_completed')
-        .insert({
-          customer_id: invoice.customer_id,
-          service_type: 'invoice',
-          service_date: invoice.invoice_date,
-          technician_name: invoice.tech_name,
-          summary,
-          pdf_path: pdfUrl,
-          payload,
-          completed_at: new Date().toISOString()
-        });
+  const existingPayload = (existingRow?.payload ?? {}) as any;
 
-      if (insertError) throw insertError;
-    }
+  const finalPdfUrl =
+    pdfUrl ||
+    existingPayload?.pdf_url ||
+    existingRow?.pdf_path ||
+    null;
+
+  const payload = {
+    kind: 'invoice',
+    invoice_id: invoice.id,
+    invoice_number: invoice.invoice_number,
+    estimate_id: invoice.estimate_id || null,
+    status: invoice.status,
+    total_amount: Number(invoice.total_amount || 0),
+    amount_paid: Number(invoice.amount_paid || 0),
+    amount_due: Number(invoice.amount_due || 0),
+    approved: null,
+    payments: [],
+    pdf_url: finalPdfUrl
   };
+
+  const summary =
+    invoice.status === 'paid'
+      ? `Invoice ${invoice.invoice_number} paid in full.`
+      : `Invoice ${invoice.invoice_number} created. Amount due: $${Number(
+          invoice.amount_due || 0
+        ).toFixed(2)}`;
+
+  const mirrorRow = {
+    customer_id: invoice.customer_id,
+    service_type: 'invoice',
+    service_date: invoice.invoice_date,
+    technician_name: invoice.tech_name,
+    summary,
+    pdf_path: finalPdfUrl,
+    payload,
+    invoice_id: invoice.id,
+    estimate_id: invoice.estimate_id || null,
+    completed_at: new Date().toISOString()
+  };
+
+  if (existingRow?.id) {
+    const { error: updateError } = await supabase
+      .from('services_completed')
+      .update(mirrorRow)
+      .eq('id', existingRow.id);
+
+    if (updateError) throw updateError;
+    return;
+  }
+
+  const { error: insertError } = await supabase
+    .from('services_completed')
+    .insert(mirrorRow);
+
+  if (insertError) throw insertError;
+};
 
   const generateAndUploadEstimatePdf = async (estimateId: string, shouldDownload = false) => {
     const { data: estimate, error: estErr } = await supabase
@@ -1074,86 +1096,86 @@ const syncEstimateToServicesCompleted = async (
   };
 
   const createInvoiceFromEstimate = async (estimateId: string) => {
-    const { data: existingInvoice, error: existingInvoiceError } = await supabase
-      .from('crm_invoices')
-      .select('id, invoice_number')
-      .eq('estimate_id', estimateId)
-      .maybeSingle();
+  const { data: existingInvoice, error: existingInvoiceError } = await supabase
+    .from('crm_invoices')
+    .select('id, invoice_number')
+    .eq('estimate_id', estimateId)
+    .maybeSingle();
 
-    if (existingInvoiceError) throw existingInvoiceError;
+  if (existingInvoiceError) throw existingInvoiceError;
 
-    if (existingInvoice) {
-      return existingInvoice;
-    }
+  if (existingInvoice) {
+    await generateAndUploadInvoicePdfFromEstimate(existingInvoice.id, false);
+    return existingInvoice;
+  }
 
-    const { data: estimate, error: estimateError } = await supabase
-      .from('estimates')
-      .select('*')
-      .eq('id', estimateId)
-      .single();
+  const { data: estimate, error: estimateError } = await supabase
+    .from('estimates')
+    .select('*')
+    .eq('id', estimateId)
+    .single();
 
-    if (estimateError) throw estimateError;
+  if (estimateError) throw estimateError;
 
-    const { data: estimateItems, error: estimateItemsError } = await supabase
-      .from('estimate_line_items')
-      .select('*')
-      .eq('estimate_id', estimateId)
-      .order('sort_order', { ascending: true });
+  const { data: estimateItems, error: estimateItemsError } = await supabase
+    .from('estimate_line_items')
+    .select('*')
+    .eq('estimate_id', estimateId)
+    .order('sort_order', { ascending: true });
 
-    if (estimateItemsError) throw estimateItemsError;
+  if (estimateItemsError) throw estimateItemsError;
 
-    const invoiceNumber = await generateUniqueInvoiceNumber();
+  const invoiceNumber = await generateUniqueInvoiceNumber();
 
-    const today = new Date().toISOString().split('T')[0];
-    const dueDate = addDays(today, 7);
+  const today = new Date().toISOString().split('T')[0];
+  const dueDate = addDays(today, 7);
+  const totalAmount = Number((estimate as any).total_amount || 0);
 
-    const totalAmount = Number((estimate as any).total_amount || 0);
-
-    const invoiceInsert = {
-      invoice_number: invoiceNumber,
-      customer_id: (estimate as any).customer_id,
-      estimate_id: (estimate as any).id,
-      invoice_date: today,
-      due_date: dueDate,
-      work_completed_date: today,
-      tech_name: (estimate as any).tech_name || '',
-      notes: (estimate as any).notes || '',
-      status: 'draft',
-      total_amount: totalAmount,
-      amount_paid: 0,
-      amount_due: totalAmount
-    };
-
-    const { data: invoice, error: invoiceError } = await supabase
-      .from('crm_invoices')
-      .insert(invoiceInsert)
-      .select()
-      .single();
-
-    if (invoiceError) throw invoiceError;
-
-    if (estimateItems && estimateItems.length > 0) {
-      const invoiceLineItems = estimateItems.map((item: any, index: number) => ({
-        invoice_id: (invoice as any).id,
-        description: item.description || '',
-        material_cost: Number(item.material_cost || 0),
-        labor_cost: Number(item.labor_cost || 0),
-        total_cost: Number(item.total_cost || 0),
-        sort_order: item.sort_order ?? index
-      }));
-
-      const { error: invoiceLineItemsError } = await supabase
-        .from('crm_invoice_line_items')
-        .insert(invoiceLineItems);
-
-      if (invoiceLineItemsError) throw invoiceLineItemsError;
-    }
-
-const invoicePdfUrl = await generateAndUploadInvoicePdfFromEstimate((invoice as any).id, false);
-await syncInvoiceToServicesCompleted((invoice as any).id, invoicePdfUrl);
-
-    return invoice;
+  const invoiceInsert = {
+    invoice_number: invoiceNumber,
+    customer_id: (estimate as any).customer_id,
+    estimate_id: (estimate as any).id,
+    invoice_date: today,
+    due_date: dueDate,
+    work_completed_date: today,
+    tech_name: (estimate as any).tech_name || '',
+    notes: (estimate as any).notes || '',
+    status: 'sent',
+    total_amount: totalAmount,
+    amount_paid: 0,
+    amount_due: totalAmount
   };
+
+  const { data: invoice, error: invoiceError } = await supabase
+    .from('crm_invoices')
+    .insert(invoiceInsert)
+    .select()
+    .single();
+
+  if (invoiceError) throw invoiceError;
+
+  if (estimateItems && estimateItems.length > 0) {
+    const invoiceLineItems = estimateItems.map((item: any, index: number) => ({
+      invoice_id: (invoice as any).id,
+      description: item.description || '',
+      material_cost: Number(item.material_cost || 0),
+      labor_cost: Number(item.labor_cost || 0),
+      total_cost: Number(item.total_cost || 0),
+      sort_order: item.sort_order ?? index
+    }));
+
+    const { error: invoiceLineItemsError } = await supabase
+      .from('crm_invoice_line_items')
+      .insert(invoiceLineItems);
+
+    if (invoiceLineItemsError) throw invoiceLineItemsError;
+  }
+
+  // IMPORTANT: do not do a blank sync first
+  await generateAndUploadInvoicePdfFromEstimate((invoice as any).id, false);
+
+  return invoice;
+};
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
