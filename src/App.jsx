@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import Dashboard from './pages/Dashboard';
+import Leads from './pages/Leads';
 import Customers from './pages/Customers';
 import Estimates from './pages/Estimates';
 import Invoices from './pages/Invoices';
@@ -13,6 +14,8 @@ function App() {
     switch (currentPage) {
       case 'dashboard':
         return <Dashboard />;
+      case 'leads':
+        return <Leads />;
       case 'customers':
         return <Customers />;
       case 'estimates':
@@ -32,6 +35,7 @@ function App() {
         <div className="nav-brand">
           <h1>CRM System</h1>
         </div>
+
         <div className="nav-links">
           <button
             className={currentPage === 'dashboard' ? 'active' : ''}
@@ -39,24 +43,35 @@ function App() {
           >
             Dashboard
           </button>
+
+          <button
+            className={currentPage === 'leads' ? 'active' : ''}
+            onClick={() => setCurrentPage('leads')}
+          >
+            Leads
+          </button>
+
           <button
             className={currentPage === 'customers' ? 'active' : ''}
             onClick={() => setCurrentPage('customers')}
           >
             Customers
           </button>
+
           <button
             className={currentPage === 'estimates' ? 'active' : ''}
             onClick={() => setCurrentPage('estimates')}
           >
             Estimates
           </button>
+
           <button
             className={currentPage === 'invoices' ? 'active' : ''}
             onClick={() => setCurrentPage('invoices')}
           >
             Invoices
           </button>
+
           <button
             className={currentPage === 'payments' ? 'active' : ''}
             onClick={() => setCurrentPage('payments')}
@@ -65,6 +80,7 @@ function App() {
           </button>
         </div>
       </nav>
+
       <main className="app-main">
         {renderPage()}
       </main>
