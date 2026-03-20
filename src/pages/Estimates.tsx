@@ -64,6 +64,7 @@ type EstimateRow = {
   notes: string | null;
   status: string;
   total_amount: number | string;
+  deposit_percentage?: number | string | null;
   customers?: {
     name?: string | null;
     address?: string | null;
@@ -94,7 +95,8 @@ function Estimates() {
     expiryDate: '',
     techName: '',
     notes: '',
-    status: 'draft'
+    status: 'draft',
+    depositPercentage: '50'
   });
   const [lineItems, setLineItems] = useState([
     { description: '', materialCost: '', laborCost: '' }
@@ -196,6 +198,20 @@ function Estimates() {
 
   const calculateGrandTotal = () => {
     return lineItems.reduce((sum, item) => sum + calculateLineTotal(item), 0);
+  };
+
+  const calculateDepositPercentage = (value: string | number | null | undefined) => {
+    const numericValue = Number(value);
+
+    if (!Number.isFinite(numericValue)) {
+      return 50;
+    }
+
+    return Math.min(Math.max(numericValue, 0), 100);
+  };
+
+  const calculateDepositAmount = (totalAmount: number, depositPercentage: string | number | null | undefined) => {
+    return totalAmount * (calculateDepositPercentage(depositPercentage) / 100);
   };
 
   const addDays = (dateString: string, days: number) => {
@@ -440,6 +456,10 @@ const syncInvoiceToServicesCompleted = async (
 
     const fmtMoney = (n: number | string) => `$${(Number(n) || 0).toFixed(2)}`;
     const safeText = (val: unknown) => (val ? String(val) : '');
+    const totalAmount = Number(typedEstimate.total_amount) || 0;
+    const depositPercentage = calculateDepositPercentage(typedEstimate.deposit_percentage);
+    const requiredDeposit = calculateDepositAmount(totalAmount, depositPercentage);
+    const remainingBalance = totalAmount - requiredDeposit;
 
     let logoDataUrl: string | null = null;
     try {
@@ -646,11 +666,35 @@ const syncInvoiceToServicesCompleted = async (
     doc.rect(totalsX, totalsY, totalsW, 22, 'F');
     doc.setTextColor(255, 255, 255);
     doc.text('TOTAL', totalsX + 10, totalsY + 15);
-    doc.text(fmtMoney(Number(typedEstimate.total_amount) || 0), totalsX + totalsW - 10, totalsY + 15, { align: 'right' });
+    doc.text(fmtMoney(totalAmount), totalsX + totalsW - 10, totalsY + 15, { align: 'right' });
 
     doc.setTextColor(0, 0, 0);
 
     y = totalsY + 70;
+
+    ensureSpace(120);
+
+    doc.setFillColor(...LIGHT_GRAY);
+    doc.rect(M, y, tableW, 58, 'F');
+    doc.setDrawColor(180);
+    doc.rect(M, y, tableW, 58);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('PAYMENT TERMS', M + 10, y + 16);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.text(
+      `Required deposit (${depositPercentage.toFixed(0)}%): ${fmtMoney(requiredDeposit)}`,
+      M + 10,
+      y + 34
+    );
+    doc.text(
+      `Remaining balance due on completion: ${fmtMoney(remainingBalance)}`,
+      M + 10,
+      y + 48
+    );
+
+    y += 78;
 
     ensureSpace(120);
 
@@ -1202,7 +1246,8 @@ const syncInvoiceToServicesCompleted = async (
             tech_name: formData.techName,
             notes: formData.notes,
             status: formData.status,
-            total_amount: totalAmount
+            total_amount: totalAmount,
+            deposit_percentage: calculateDepositPercentage(formData.depositPercentage)
           })
           .select()
           .single();
@@ -1341,7 +1386,8 @@ const handleDelete = async (id: string) => {
       expiryDate: '',
       techName: '',
       notes: '',
-      status: 'draft'
+      status: 'draft',
+      depositPercentage: '50'
     });
     setLineItems([{ description: '', materialCost: '', laborCost: '' }]);
   };
@@ -1530,6 +1576,43 @@ const handleDelete = async (id: string) => {
               >
                 + Add Line Item
               </button>
+            </div>
+
+            <div className="form-row" style={{ marginTop: '24px' }}>
+              <div className="form-group">
+                <label>Deposit %</label>
+                <input
+                  type="number"
+                  name="depositPercentage"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  value={formData.depositPercentage}
+                  onChange={handleInputChange}
+                  placeholder="50"
+                />
+                <small style={{ color: '#6b7280', display: 'block', marginTop: '6px' }}>
+                  Defaults to 50%. The remaining balance will be marked due on completion.
+                </small>
+              </div>
+              <div className="form-group" style={{ display: 'flex', alignItems: 'flex-end' }}>
+                <div
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    backgroundColor: '#f8f9fa',
+                    borderRadius: '4px',
+                    border: '1px solid #e5e7eb'
+                  }}
+                >
+                  <div style={{ fontSize: '14px', fontWeight: '600', marginBottom: '6px' }}>
+                    Required Deposit: ${calculateDepositAmount(calculateGrandTotal(), formData.depositPercentage).toFixed(2)}
+                  </div>
+                  <div style={{ fontSize: '14px', color: '#4b5563' }}>
+                    Due on Completion: ${(calculateGrandTotal() - calculateDepositAmount(calculateGrandTotal(), formData.depositPercentage)).toFixed(2)}
+                  </div>
+                </div>
+              </div>
             </div>
 
             <div className="form-group" style={{ marginTop: '24px' }}>
