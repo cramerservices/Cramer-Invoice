@@ -64,7 +64,7 @@ type EstimateRow = {
   notes: string | null;
   status: string;
   total_amount: number | string;
-  deposit_percentage?: number | string | null;
+  deposit_percent?: number | string | null;
   customers?: {
     name?: string | null;
     address?: string | null;
@@ -228,7 +228,7 @@ function Estimates() {
         techName: (estimate as any).tech_name || '',
         notes: (estimate as any).notes || '',
         status: (estimate as any).status || 'draft',
-        depositPercentage: String((estimate as any).deposit_percentage ?? '50')
+        depositPercentage: String((estimate as any).deposit_percent ?? '50')
       });
       setLineItems(
         items && items.length > 0
@@ -522,7 +522,7 @@ const syncInvoiceToServicesCompleted = async (
     const fmtMoney = (n: number | string) => `$${(Number(n) || 0).toFixed(2)}`;
     const safeText = (val: unknown) => (val ? String(val) : '');
     const totalAmount = Number(typedEstimate.total_amount) || 0;
-    const depositPercentage = calculateDepositPercentage(typedEstimate.deposit_percentage);
+    const depositPercentage = calculateDepositPercentage(typedEstimate.deposit_percent);
     const requiredDeposit = calculateDepositAmount(totalAmount, depositPercentage);
     const remainingBalance = totalAmount - requiredDeposit;
 
@@ -1313,7 +1313,7 @@ const syncInvoiceToServicesCompleted = async (
             notes: formData.notes,
             status: formData.status,
             total_amount: totalAmount,
-            deposit_percentage: calculateDepositPercentage(formData.depositPercentage),
+            deposit_percent: calculateDepositPercentage(formData.depositPercentage),
             updated_at: new Date().toISOString()
           })
           .eq('id', editingEstimateId)
@@ -1363,7 +1363,7 @@ const syncInvoiceToServicesCompleted = async (
               notes: formData.notes,
               status: formData.status,
               total_amount: totalAmount,
-              deposit_percentage: calculateDepositPercentage(formData.depositPercentage)
+              deposit_percent: calculateDepositPercentage(formData.depositPercentage)
             })
             .select()
             .single();
