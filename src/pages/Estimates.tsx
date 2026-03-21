@@ -88,6 +88,8 @@ function Estimates() {
   const [showForm, setShowForm] = useState(false);
   const [loading, setLoading] = useState(true);
   const [pdfBusyId, setPdfBusyId] = useState<string | null>(null);
+  const [editingEstimateId, setEditingEstimateId] = useState<string | null>(null);
+  const [editingOriginalStatus, setEditingOriginalStatus] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     estimateNumber: '',
     customerId: '',
@@ -108,9 +110,13 @@ function Estimates() {
 
   useEffect(() => {
     if (showForm) {
+      if (editingEstimateId) {
+        return;
+      }
+
       generateEstimateNumber();
     }
-  }, [showForm]);
+  }, [showForm, editingEstimateId]);
 
   const generateEstimateNumber = async () => {
     try {
@@ -180,6 +186,65 @@ function Estimates() {
     const updated = [...lineItems];
     updated[index] = { ...updated[index], [field]: value };
     setLineItems(updated);
+  };
+
+  const startCreateEstimate = () => {
+    resetForm();
+    setEditingEstimateId(null);
+    setEditingOriginalStatus(null);
+    setShowForm(true);
+  };
+
+  const handleEditDraft = async (estimateId: string) => {
+    try {
+      const [{ data: estimate, error: estimateError }, { data: items, error: itemsError }] = await Promise.all([
+        supabase
+          .from('estimates')
+          .select('*')
+          .eq('id', estimateId)
+          .single(),
+        supabase
+          .from('estimate_line_items')
+          .select('*')
+          .eq('estimate_id', estimateId)
+          .order('sort_order', { ascending: true })
+      ]);
+
+      if (estimateError) throw estimateError;
+      if (itemsError) throw itemsError;
+
+      if ((estimate as any).status !== 'draft') {
+        alert('Only draft estimates can be edited.');
+        return;
+      }
+
+      setEditingEstimateId(estimateId);
+      setEditingOriginalStatus((estimate as any).status || 'draft');
+      setFormData({
+        estimateNumber: (estimate as any).estimate_number || '',
+        customerId: (estimate as any).customer_id || '',
+        estimateDate: (estimate as any).estimate_date || new Date().toISOString().split('T')[0],
+        expiryDate: (estimate as any).expiry_date || '',
+        techName: (estimate as any).tech_name || '',
+        notes: (estimate as any).notes || '',
+        status: (estimate as any).status || 'draft',
+        depositPercentage: String((estimate as any).deposit_percentage ?? '50')
+      });
+      setLineItems(
+        items && items.length > 0
+          ? items.map((item: any) => ({
+              description: item.description || '',
+              materialCost: String(item.material_cost ?? ''),
+              laborCost: String(item.labor_cost ?? '')
+            }))
+          : [{ description: '', materialCost: '', laborCost: '' }]
+      );
+      setShowForm(true);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (error) {
+      console.error('Error loading estimate for edit:', error);
+      alert('Failed to load draft estimate for editing');
+    }
   };
 
   const addLineItem = () => {
@@ -1226,55 +1291,7 @@ const syncInvoiceToServicesCompleted = async (
 
     try {
       const totalAmount = calculateGrandTotal();
-
-      let estimate: any = null;
-      let lastError: any = null;
-
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const estimateNumber =
-          attempt === 0 && formData.estimateNumber
-            ? formData.estimateNumber
-            : await generateEstimateNumber();
-
-        const { data, error } = await supabase
-          .from('estimates')
-          .insert({
-            estimate_number: estimateNumber,
-            customer_id: formData.customerId,
-            estimate_date: formData.estimateDate,
-            expiry_date: formData.expiryDate || null,
-            tech_name: formData.techName,
-            notes: formData.notes,
-            status: formData.status,
-            total_amount: totalAmount,
-            deposit_percentage: calculateDepositPercentage(formData.depositPercentage)
-          })
-          .select()
-          .single();
-
-        if (!error) {
-          estimate = data;
-          break;
-        }
-
-        lastError = error;
-
-        if (
-          error.code === '23505' &&
-          String(error.message || '').includes('estimates_estimate_number_unique')
-        ) {
-          continue;
-        }
-
-        throw error;
-      }
-
-      if (!estimate) {
-        throw lastError || new Error('Failed to create estimate');
-      }
-
       const lineItemsToInsert = lineItems.map((item, index) => ({
-        estimate_id: estimate.id,
         description: item.description,
         material_cost: parseFloat(item.materialCost) || 0,
         labor_cost: parseFloat(item.laborCost) || 0,
@@ -1282,26 +1299,131 @@ const syncInvoiceToServicesCompleted = async (
         sort_order: index
       }));
 
-      const { error: lineItemsError } = await supabase
-        .from('estimate_line_items')
-        .insert(lineItemsToInsert);
+      let savedEstimateId: string | null = editingEstimateId;
+      let savedEstimateStatus = formData.status;
 
-      if (lineItemsError) throw lineItemsError;
+      if (editingEstimateId) {
+        const { data: updatedEstimate, error: updateError } = await supabase
+          .from('estimates')
+          .update({
+            customer_id: formData.customerId,
+            estimate_date: formData.estimateDate,
+            expiry_date: formData.expiryDate || null,
+            tech_name: formData.techName,
+            notes: formData.notes,
+            status: formData.status,
+            total_amount: totalAmount,
+            deposit_percentage: calculateDepositPercentage(formData.depositPercentage),
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', editingEstimateId)
+          .select()
+          .single();
 
-      await syncEstimateToServicesCompleted(estimate.id, null);
-      await generateAndUploadEstimatePdf(estimate.id, false);
+        if (updateError) throw updateError;
 
-  if (estimate.status === 'job_complete') {
-  await createInvoiceFromEstimate(estimate.id);
-}
+        const { error: deleteLineItemsError } = await supabase
+          .from('estimate_line_items')
+          .delete()
+          .eq('estimate_id', editingEstimateId);
+
+        if (deleteLineItemsError) throw deleteLineItemsError;
+
+        const { error: insertLineItemsError } = await supabase
+          .from('estimate_line_items')
+          .insert(
+            lineItemsToInsert.map((item) => ({
+              estimate_id: editingEstimateId,
+              ...item
+            }))
+          );
+
+        if (insertLineItemsError) throw insertLineItemsError;
+
+        savedEstimateId = (updatedEstimate as any).id;
+        savedEstimateStatus = (updatedEstimate as any).status || formData.status;
+      } else {
+        let estimate: any = null;
+        let lastError: any = null;
+
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const estimateNumber =
+            attempt === 0 && formData.estimateNumber
+              ? formData.estimateNumber
+              : await generateEstimateNumber();
+
+          const { data, error } = await supabase
+            .from('estimates')
+            .insert({
+              estimate_number: estimateNumber,
+              customer_id: formData.customerId,
+              estimate_date: formData.estimateDate,
+              expiry_date: formData.expiryDate || null,
+              tech_name: formData.techName,
+              notes: formData.notes,
+              status: formData.status,
+              total_amount: totalAmount,
+              deposit_percentage: calculateDepositPercentage(formData.depositPercentage)
+            })
+            .select()
+            .single();
+
+          if (!error) {
+            estimate = data;
+            break;
+          }
+
+          lastError = error;
+
+          if (
+            error.code === '23505' &&
+            String(error.message || '').includes('estimates_estimate_number_unique')
+          ) {
+            continue;
+          }
+
+          throw error;
+        }
+
+        if (!estimate) {
+          throw lastError || new Error('Failed to create estimate');
+        }
+
+        const { error: lineItemsError } = await supabase
+          .from('estimate_line_items')
+          .insert(
+            lineItemsToInsert.map((item) => ({
+              estimate_id: estimate.id,
+              ...item
+            }))
+          );
+
+        if (lineItemsError) throw lineItemsError;
+
+        savedEstimateId = estimate.id;
+        savedEstimateStatus = estimate.status;
+      }
+
+      if (!savedEstimateId) {
+        throw new Error('Failed to determine saved estimate id');
+      }
+
+      await syncEstimateToServicesCompleted(savedEstimateId, null);
+      await generateAndUploadEstimatePdf(savedEstimateId, false);
+
+      if (savedEstimateStatus === 'job_complete' && editingOriginalStatus !== 'job_complete') {
+        await createInvoiceFromEstimate(savedEstimateId);
+      }
 
       setShowForm(false);
       resetForm();
+      setEditingEstimateId(null);
+      setEditingOriginalStatus(null);
       await fetchData();
-      alert('Estimate created successfully!');
+      alert(editingEstimateId ? 'Estimate updated successfully!' : 'Estimate created successfully!');
     } catch (error: any) {
       console.error('Error saving estimate:', error);
-      alert(`Failed to create estimate: ${error?.message || 'Unknown error'}`);
+      alert(`Failed to save estimate: ${error?.message || 'Unknown error'}`);
     }
   };
 
@@ -1401,7 +1523,7 @@ const handleDelete = async (id: string) => {
       <div className="page-header">
         <h2>Estimates</h2>
         {!showForm && (
-          <button className="btn-primary" onClick={() => setShowForm(true)}>
+          <button className="btn-primary" onClick={startCreateEstimate}>
             + Create Estimate
           </button>
         )}
@@ -1409,7 +1531,7 @@ const handleDelete = async (id: string) => {
 
       {showForm && (
         <div className="form-card">
-          <h3>New Estimate</h3>
+          <h3>{editingEstimateId ? 'Edit Draft Estimate' : 'New Estimate'}</h3>
           <form onSubmit={handleSubmit}>
             <div className="form-row">
               <div className="form-group">
@@ -1650,12 +1772,14 @@ const handleDelete = async (id: string) => {
                 onClick={() => {
                   setShowForm(false);
                   resetForm();
+                  setEditingEstimateId(null);
+                  setEditingOriginalStatus(null);
                 }}
               >
                 Cancel
               </button>
               <button type="submit" className="btn-primary">
-                Create Estimate
+                {editingEstimateId ? 'Save Changes' : 'Create Estimate'}
               </button>
             </div>
           </form>
@@ -1703,6 +1827,14 @@ const handleDelete = async (id: string) => {
                   </td>
                   <td>
                     <div className="action-buttons">
+                      {estimate.status === 'draft' && (
+                        <button
+                          className="btn-small btn-edit"
+                          onClick={() => handleEditDraft(estimate.id)}
+                        >
+                          Edit
+                        </button>
+                      )}
                       <button
                         className="btn-small btn-view"
                         onClick={() => downloadPDF(estimate.id)}
