@@ -33,12 +33,12 @@ function Dashboard() {
     fetchDashboardData();
   }, []);
 
-  const fetchDashboardData = async () => {
+ const fetchDashboardData = async () => {
   try {
     setLoading(true);
 
     const [
-      customersCountRes,
+      customersRes,
       estimatesCountRes,
       invoicesTotalsRes,
       recentEstimatesRes,
@@ -46,10 +46,7 @@ function Dashboard() {
       recentHoursRes,
       recentExpensesRes,
       allExpensesRes,
-      allHoursRes,
-      allEstimatesRes,
-      allInvoicesDetailedRes,
-      allCustomersRes
+      allHoursRes
     ] = await Promise.all([
       supabase
         .from('customers')
@@ -60,18 +57,18 @@ function Dashboard() {
         .select('id', { count: 'exact', head: true }),
 
       supabase
-      .from('crm_invoices')
-.select('id, customer_id, estimate_id, total_amount, amount_paid, amount_due, invoice_number, status, created_at, invoice_date, due_date')
+        .from('crm_invoices')
+        .select('id, estimate_id, total_amount, amount_paid, amount_due', { count: 'exact' }),
 
       supabase
         .from('estimates')
-        .select('*')
+        .select('*, customers(name)')
         .order('created_at', { ascending: false })
         .limit(5),
 
       supabase
         .from('crm_invoices')
-        .select('*')
+        .select('*, customers(name)')
         .order('created_at', { ascending: false })
         .limit(5),
 
@@ -90,29 +87,15 @@ function Dashboard() {
 
       supabase
         .from('job_expenses')
-        .select('*'),
+        .select('id, estimate_id, estimate_number, total_amount'),
 
       supabase
         .from('job_hours')
-        .select('*')
-        .neq('status', 'running'),
-
-      supabase
-        .from('estimates')
-        .select('*')
-        .order('created_at', { ascending: false }),
-
-      supabase
-        .from('crm_invoices')
-        .select('*')
-        .order('created_at', { ascending: false }),
-
-      supabase
-        .from('customers')
-        .select('id, name')
+        .select('id, estimate_id, estimate_number, total_hours')
+        .neq('status', 'running')
     ]);
 
-    if (customersCountRes.error) throw customersCountRes.error;
+    if (customersRes.error) throw customersRes.error;
     if (estimatesCountRes.error) throw estimatesCountRes.error;
     if (invoicesTotalsRes.error) throw invoicesTotalsRes.error;
     if (recentEstimatesRes.error) throw recentEstimatesRes.error;
@@ -121,33 +104,10 @@ function Dashboard() {
     if (recentExpensesRes.error) throw recentExpensesRes.error;
     if (allExpensesRes.error) throw allExpensesRes.error;
     if (allHoursRes.error) throw allHoursRes.error;
-    if (allEstimatesRes.error) throw allEstimatesRes.error;
-    if (allInvoicesDetailedRes.error) throw allInvoicesDetailedRes.error;
-    if (allCustomersRes.error) throw allCustomersRes.error;
 
     const allInvoices = invoicesTotalsRes.data || [];
     const allExpenses = allExpensesRes.data || [];
     const allHours = allHoursRes.data || [];
-    const allEstimates = allEstimatesRes.data || [];
-    const allInvoicesDetailed = allInvoicesDetailedRes.data || [];
-    const allCustomers = allCustomersRes.data || [];
-
-    const customerMap = {};
-    allCustomers.forEach((customer) => {
-      customerMap[customer.id] = customer.name;
-    });
-
-    const attachCustomerName = (row) => ({
-      ...row,
-      customers: {
-        name: customerMap[row.customer_id] || 'Unknown Customer'
-      }
-    });
-
-    const recentEstimates = (recentEstimatesRes.data || []).map(attachCustomerName);
-    const recentInvoices = (recentInvoicesRes.data || []).map(attachCustomerName);
-    const allEstimatesWithCustomer = allEstimates.map(attachCustomerName);
-    const allInvoicesWithCustomer = allInvoicesDetailed.map(attachCustomerName);
 
     const totalRevenue = allInvoices.reduce(
       (sum, inv) => sum + parseFloat(inv.total_amount || 0),
@@ -180,54 +140,34 @@ function Dashboard() {
     const revenueByEstimate = {};
     const expenseByEstimate = {};
     const hoursByEstimate = {};
-    const estimateNumbers = {};
-    const customerNamesByEstimate = {};
 
-    allInvoicesWithCustomer.forEach((inv) => {
+    allInvoices.forEach((inv) => {
       if (!inv.estimate_id) return;
-
       revenueByEstimate[inv.estimate_id] =
         (revenueByEstimate[inv.estimate_id] || 0) + Number(inv.total_amount || 0);
-
-      allInvoicesWithCustomer.forEach((inv) => {
-  if (!inv.estimate_id) return;
-
-  revenueByEstimate[inv.estimate_id] =
-    (revenueByEstimate[inv.estimate_id] || 0) + Number(inv.total_amount || 0);
-
-  if (inv.customers?.name) {
-    customerNamesByEstimate[inv.estimate_id] = inv.customers.name;
-  }
-});
+    });
 
     allExpenses.forEach((exp) => {
       if (!exp.estimate_id) return;
-
       expenseByEstimate[exp.estimate_id] =
         (expenseByEstimate[exp.estimate_id] || 0) + Number(exp.total_amount || 0);
-
-      estimateNumbers[exp.estimate_id] =
-        exp.estimate_number || estimateNumbers[exp.estimate_id];
     });
 
     allHours.forEach((row) => {
       if (!row.estimate_id) return;
-
       hoursByEstimate[row.estimate_id] =
         (hoursByEstimate[row.estimate_id] || 0) + Number(row.total_hours || 0);
-
-      estimateNumbers[row.estimate_id] =
-        row.estimate_number || estimateNumbers[row.estimate_id];
     });
 
-    allEstimatesWithCustomer.forEach((est) => {
-      if (!est.id) return;
-
-      estimateNumbers[est.id] =
-        est.estimate_number || estimateNumbers[est.id];
-
-      if (est.customers?.name) {
-        customerNamesByEstimate[est.id] = est.customers.name;
+    const estimateNumbers = {};
+    allExpenses.forEach((exp) => {
+      if (exp.estimate_id) {
+        estimateNumbers[exp.estimate_id] = exp.estimate_number || estimateNumbers[exp.estimate_id];
+      }
+    });
+    allHours.forEach((row) => {
+      if (row.estimate_id) {
+        estimateNumbers[row.estimate_id] = row.estimate_number || estimateNumbers[row.estimate_id];
       }
     });
 
@@ -250,7 +190,6 @@ function Dashboard() {
         return {
           estimate_id: estimateId,
           estimate_number: estimateNumbers[estimateId] || 'Unknown Estimate',
-          customer_name: customerNamesByEstimate[estimateId] || 'Unknown Customer',
           revenue,
           expenses,
           hours,
@@ -262,9 +201,9 @@ function Dashboard() {
       .slice(0, 5);
 
     setStats({
-      totalCustomers: customersCountRes.count || 0,
+      totalCustomers: customersRes.count || 0,
       totalEstimates: estimatesCountRes.count || 0,
-      totalInvoices: allInvoices.length || 0,
+      totalInvoices: invoicesTotalsRes.count || 0,
       totalRevenue,
       paidAmount,
       pendingAmount,
@@ -272,15 +211,11 @@ function Dashboard() {
       totalHours,
       totalProfit,
       profitPerHour,
-      recentEstimates,
-      recentInvoices,
+      recentEstimates: recentEstimatesRes.data || [],
+      recentInvoices: recentInvoicesRes.data || [],
       recentHours: recentHoursRes.data || [],
       recentExpenses: recentExpensesRes.data || [],
-      jobMetrics,
-      allInvoices: allInvoicesWithCustomer,
-      allEstimates: allEstimatesWithCustomer,
-      allHours,
-      allExpenses
+      jobMetrics
     });
   } catch (error) {
     console.error('Error fetching dashboard data:', error);
