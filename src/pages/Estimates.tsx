@@ -1298,7 +1298,7 @@ function Estimates() {
     }
   };
 
-  const handleEmailEstimateClick = async (estimateId: string) => {
+const handleEmailEstimateClick = async (estimateId: string) => {
   try {
     setEmailBusyId(estimateId);
 
