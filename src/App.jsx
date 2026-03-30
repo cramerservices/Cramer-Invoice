@@ -5,30 +5,32 @@ import Customers from './pages/Customers';
 import Estimates from './pages/Estimates';
 import Invoices from './pages/Invoices';
 import Payments from './pages/Payments';
-import './App.css';
 import Hours from './pages/Hours';
- 
+import './App.css';
+
 function App() {
   const [currentPage, setCurrentPage] = useState('dashboard');
 
- const renderPage = () => {
-  switch (currentPage) {
-    case 'dashboard':
-      return <Dashboard />;
-    case 'customers':
-      return <Customers />;
-    case 'estimates':
-      return <Estimates />;
-    case 'invoices':
-      return <Invoices />;
-    case 'payments':
-      return <Payments />;
-    case 'hours':
-      return <Hours />;
-    default:
-      return <Dashboard />;
-  }
-};
+  const renderPage = () => {
+    switch (currentPage) {
+      case 'dashboard':
+        return <Dashboard />;
+      case 'hours':
+        return <Hours />;
+      case 'leads':
+        return <Leads />;
+      case 'customers':
+        return <Customers />;
+      case 'estimates':
+        return <Estimates />;
+      case 'invoices':
+        return <Invoices />;
+      case 'payments':
+        return <Payments />;
+      default:
+        return <Dashboard />;
+    }
+  };
 
   return (
     <div className="app">
@@ -44,12 +46,14 @@ function App() {
           >
             Dashboard
           </button>
-<button
-  className={currentPage === 'hours' ? 'active' : ''}
-  onClick={() => setCurrentPage('hours')}
->
-  Hours
-</button>
+
+          <button
+            className={currentPage === 'hours' ? 'active' : ''}
+            onClick={() => setCurrentPage('hours')}
+          >
+            Hours
+          </button>
+
           <button
             className={currentPage === 'leads' ? 'active' : ''}
             onClick={() => setCurrentPage('leads')}
