@@ -604,21 +604,21 @@ function Dashboard() {
       );
     }
 
-    if (selectedView === 'estimate_detail' && selectedData) {
-      return (
-        <div className="detail-stack">
-          <div className="detail-card">
-<div className="detail-row"><strong>Estimate #:</strong> <span>{selectedData.estimate_id || '-'}</span></div>
-            <div className="detail-row"><strong>Customer:</strong> <span>{selectedData.customers?.name || '-'}</span></div>
-            <div className="detail-row"><strong>Status:</strong> <span>{selectedData.status || '-'}</span></div>
-            <div className="detail-row"><strong>Total:</strong> <span>{formatCurrency(selectedData.total_amount)}</span></div>
-            <div className="detail-row"><strong>Created:</strong> <span>{formatDate(selectedData.created_at)}</span></div>
-            <div className="detail-row"><strong>Updated:</strong> <span>{formatDate(selectedData.updated_at)}</span></div>
-            <div className="detail-row"><strong>Description:</strong> <span>{selectedData.description || '-'}</span></div>
-          </div>
-        </div>
-      );
-    }
+  if (selectedView === 'estimate_detail' && selectedData) {
+  return (
+    <div className="detail-stack">
+      <div className="detail-card">
+<div className="detail-row"><strong>Estimate #:</strong> <span>{selectedData.estimate_number || '-'}</span></div>
+        <div className="detail-row"><strong>Customer:</strong> <span>{selectedData.customers?.name || '-'}</span></div>
+        <div className="detail-row"><strong>Status:</strong> <span>{selectedData.status || '-'}</span></div>
+        <div className="detail-row"><strong>Total:</strong> <span>{formatCurrency(selectedData.total_amount)}</span></div>
+        <div className="detail-row"><strong>Created:</strong> <span>{formatDate(selectedData.created_at)}</span></div>
+        <div className="detail-row"><strong>Updated:</strong> <span>{formatDate(selectedData.updated_at)}</span></div>
+        <div className="detail-row"><strong>Description:</strong> <span>{selectedData.description || '-'}</span></div>
+      </div>
+    </div>
+  );
+}
 
     if (selectedView === 'invoice_detail' && selectedData) {
       return (
