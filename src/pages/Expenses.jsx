@@ -10,6 +10,9 @@ const CATEGORY_OPTIONS = [
   'Other'
 ];
 
+const OVERHEAD_OPTION_VALUE = 'OVERHEAD';
+const OVERHEAD_LABEL = 'Overhead / No Job';
+
 const emptyLineItem = (sortOrder = 0) => ({
   id: `tmp-${Date.now()}-${Math.random()}`,
   description: '',
@@ -35,9 +38,7 @@ function Expenses() {
     notes: ''
   });
 
-  const [lineItems, setLineItems] = useState([
-    emptyLineItem(0)
-  ]);
+  const [lineItems, setLineItems] = useState([emptyLineItem(0)]);
 
   const [editingExpenseId, setEditingExpenseId] = useState(null);
   const [expandedExpenseId, setExpandedExpenseId] = useState(null);
@@ -181,6 +182,14 @@ function Expenses() {
     setEditingExpenseId(null);
   }
 
+  function getEstimateDisplayLabel(expense) {
+    if (!expense.estimate_id || expense.estimate_number === OVERHEAD_OPTION_VALUE || expense.estimate_number === OVERHEAD_LABEL) {
+      return OVERHEAD_LABEL;
+    }
+
+    return expense.estimate_number || 'Unknown Estimate';
+  }
+
   async function handleSaveExpense(e) {
     e.preventDefault();
 
@@ -201,10 +210,11 @@ function Expenses() {
     try {
       setSaving(true);
 
+      const isOverhead = form.estimate_id === OVERHEAD_OPTION_VALUE;
       const estimate = approvedEstimates.find((item) => item.id === form.estimate_id);
       const tech = techs.find((item) => item.user_id === form.tech_user_id);
 
-      if (!estimate) {
+      if (!isOverhead && !estimate) {
         throw new Error('Selected estimate was not found.');
       }
 
@@ -212,20 +222,22 @@ function Expenses() {
         throw new Error('Selected tech was not found.');
       }
 
+      const expenseHeaderPayload = {
+        estimate_id: isOverhead ? null : estimate.id,
+        estimate_number: isOverhead ? OVERHEAD_LABEL : estimate.estimate_number,
+        customer_id: isOverhead ? null : estimate.customer_id,
+        tech_user_id: tech.user_id,
+        tech_name: tech.name || tech.email || 'Unknown Tech',
+        expense_date: form.expense_date,
+        category: form.category,
+        notes: form.notes || null,
+        total_amount: totalAmount
+      };
+
       if (editingExpenseId) {
         const { error: updateHeaderError } = await supabase
           .from('job_expenses')
-          .update({
-            estimate_id: estimate.id,
-            estimate_number: estimate.estimate_number,
-            customer_id: estimate.customer_id,
-            tech_user_id: tech.user_id,
-            tech_name: tech.name || tech.email || 'Unknown Tech',
-            expense_date: form.expense_date,
-            category: form.category,
-            notes: form.notes || null,
-            total_amount: totalAmount
-          })
+          .update(expenseHeaderPayload)
           .eq('id', editingExpenseId);
 
         if (updateHeaderError) throw updateHeaderError;
@@ -254,17 +266,7 @@ function Expenses() {
       } else {
         const { data: expenseInsertData, error: expenseInsertError } = await supabase
           .from('job_expenses')
-          .insert({
-            estimate_id: estimate.id,
-            estimate_number: estimate.estimate_number,
-            customer_id: estimate.customer_id,
-            tech_user_id: tech.user_id,
-            tech_name: tech.name || tech.email || 'Unknown Tech',
-            expense_date: form.expense_date,
-            category: form.category,
-            notes: form.notes || null,
-            total_amount: totalAmount
-          })
+          .insert(expenseHeaderPayload)
           .select()
           .single();
 
@@ -308,9 +310,14 @@ function Expenses() {
 
       if (error) throw error;
 
+      const isOverhead =
+        !expense.estimate_id ||
+        expense.estimate_number === OVERHEAD_OPTION_VALUE ||
+        expense.estimate_number === OVERHEAD_LABEL;
+
       setEditingExpenseId(expense.id);
       setForm({
-        estimate_id: expense.estimate_id || '',
+        estimate_id: isOverhead ? OVERHEAD_OPTION_VALUE : expense.estimate_id || '',
         tech_user_id: expense.tech_user_id || '',
         expense_date: expense.expense_date || new Date().toISOString().slice(0, 10),
         category: expense.category || 'Materials',
@@ -395,6 +402,7 @@ function Expenses() {
               onChange={(e) => setForm({ ...form, estimate_id: e.target.value })}
             >
               <option value="">Select approved estimate</option>
+              <option value={OVERHEAD_OPTION_VALUE}>{OVERHEAD_LABEL}</option>
               {estimateOptions.map((estimate) => (
                 <option key={estimate.id} value={estimate.id}>
                   {estimate.label}
@@ -527,7 +535,7 @@ function Expenses() {
                 <div className="list-item">
                   <div className="list-item-main">
                     <div className="list-item-title">
-                      {expense.estimate_number}
+                      {getEstimateDisplayLabel(expense)}
                     </div>
                     <div className="list-item-subtitle">
                       {expense.tech_name} • {expense.category}
