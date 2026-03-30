@@ -15,7 +15,7 @@ function Hours() {
     estimate_id: '',
     tech_user_id: '',
     notes: ''
-  });
+  });     
 
   const [manualForm, setManualForm] = useState({
     estimate_id: '',
