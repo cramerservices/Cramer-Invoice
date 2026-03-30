@@ -11,8 +11,10 @@ function Dashboard() {
     paidAmount: 0,
     pendingAmount: 0,
     recentInvoices: [],
-    recentEstimates: []
+    recentEstimates: [],
+    recentHours: []
   });
+
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -21,38 +23,82 @@ function Dashboard() {
 
   const fetchDashboardData = async () => {
     try {
-      const [customersRes, estimatesRes, invoicesRes] = await Promise.all([
-        supabase.from('customers').select('id', { count: 'exact', head: true }),
-        supabase.from('estimates').select('id', { count: 'exact', head: true }),
-        supabase.from('crm_invoices').select('*').order('created_at', { ascending: false }).limit(5)
+      setLoading(true);
+
+      const [
+        customersRes,
+        estimatesCountRes,
+        invoicesTotalsRes,
+        recentEstimatesRes,
+        recentInvoicesRes,
+        recentHoursRes
+      ] = await Promise.all([
+        supabase
+          .from('customers')
+          .select('id', { count: 'exact', head: true }),
+
+        supabase
+          .from('estimates')
+          .select('id', { count: 'exact', head: true }),
+
+        supabase
+          .from('crm_invoices')
+          .select('id, total_amount, amount_paid, amount_due', { count: 'exact' }),
+
+        supabase
+          .from('estimates')
+          .select('*, customers(name)')
+          .order('created_at', { ascending: false })
+          .limit(5),
+
+        supabase
+          .from('crm_invoices')
+          .select('*, customers(name)')
+          .order('created_at', { ascending: false })
+          .limit(5),
+
+        supabase
+          .from('job_hours')
+          .select('*')
+          .neq('status', 'running')
+          .order('created_at', { ascending: false })
+          .limit(5)
       ]);
 
-      const invoicesData = invoicesRes.data || [];
-      const totalRevenue = invoicesData.reduce((sum, inv) => sum + parseFloat(inv.total_amount || 0), 0);
-      const paidAmount = invoicesData.reduce((sum, inv) => sum + parseFloat(inv.amount_paid || 0), 0);
-      const pendingAmount = invoicesData.reduce((sum, inv) => sum + parseFloat(inv.amount_due || 0), 0);
+      if (customersRes.error) throw customersRes.error;
+      if (estimatesCountRes.error) throw estimatesCountRes.error;
+      if (invoicesTotalsRes.error) throw invoicesTotalsRes.error;
+      if (recentEstimatesRes.error) throw recentEstimatesRes.error;
+      if (recentInvoicesRes.error) throw recentInvoicesRes.error;
+      if (recentHoursRes.error) throw recentHoursRes.error;
 
-      const estimatesData = await supabase
-        .from('estimates')
-        .select('*, customers(name)')
-        .order('created_at', { ascending: false })
-        .limit(5);
+      const allInvoices = invoicesTotalsRes.data || [];
 
-      const invoicesWithCustomers = await supabase
-        .from('crm_invoices')
-        .select('*, customers(name)')
-        .order('created_at', { ascending: false })
-        .limit(5);
+      const totalRevenue = allInvoices.reduce(
+        (sum, inv) => sum + parseFloat(inv.total_amount || 0),
+        0
+      );
+
+      const paidAmount = allInvoices.reduce(
+        (sum, inv) => sum + parseFloat(inv.amount_paid || 0),
+        0
+      );
+
+      const pendingAmount = allInvoices.reduce(
+        (sum, inv) => sum + parseFloat(inv.amount_due || 0),
+        0
+      );
 
       setStats({
         totalCustomers: customersRes.count || 0,
-        totalEstimates: estimatesRes.count || 0,
-        totalInvoices: invoicesRes.count || 0,
+        totalEstimates: estimatesCountRes.count || 0,
+        totalInvoices: invoicesTotalsRes.count || 0,
         totalRevenue,
         paidAmount,
         pendingAmount,
-        recentEstimates: estimatesData.data || [],
-        recentInvoices: invoicesWithCustomers.data || []
+        recentEstimates: recentEstimatesRes.data || [],
+        recentInvoices: recentInvoicesRes.data || [],
+        recentHours: recentHoursRes.data || []
       });
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
@@ -66,6 +112,8 @@ function Dashboard() {
   };
 
   const formatDate = (dateString) => {
+    if (!dateString) return '-';
+
     return new Date(dateString).toLocaleDateString('en-US', {
       month: 'short',
       day: 'numeric',
@@ -161,7 +209,9 @@ function Dashboard() {
                     </div>
                   </div>
                   <div className="list-item-side">
-                    <div className="list-item-amount">{formatCurrency(estimate.total_amount)}</div>
+                    <div className="list-item-amount">
+                      {formatCurrency(estimate.total_amount)}
+                    </div>
                     <span className={`status-badge status-${estimate.status}`}>
                       {estimate.status}
                     </span>
@@ -189,9 +239,41 @@ function Dashboard() {
                     </div>
                   </div>
                   <div className="list-item-side">
-                    <div className="list-item-amount">{formatCurrency(invoice.total_amount)}</div>
+                    <div className="list-item-amount">
+                      {formatCurrency(invoice.total_amount)}
+                    </div>
                     <span className={`status-badge status-${invoice.status}`}>
                       {invoice.status}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="dashboard-section">
+          <h3>Recent Job Hours</h3>
+          {stats.recentHours.length === 0 ? (
+            <div className="empty-state-small">No hour entries yet</div>
+          ) : (
+            <div className="list-items">
+              {stats.recentHours.map((row) => (
+                <div key={row.id} className="list-item">
+                  <div className="list-item-main">
+                    <div className="list-item-title">
+                      {row.estimate_number || 'Unknown Estimate'}
+                    </div>
+                    <div className="list-item-subtitle">
+                      {row.tech_name || 'Unknown Tech'}
+                    </div>
+                    <div className="list-item-subtitle">
+                      {formatDate(row.work_date)} • {parseFloat(row.total_hours || 0).toFixed(2)} hrs
+                    </div>
+                  </div>
+                  <div className="list-item-side">
+                    <span className={`status-badge status-${row.status}`}>
+                      {row.status}
                     </span>
                   </div>
                 </div>
