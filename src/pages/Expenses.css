@@ -137,7 +137,25 @@
   .expenses-grid {
     grid-template-columns: 1fr;
   }
+.invoice-btn {
+  background: #2563eb;
+  color: #fff;
+  border: none;
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-right: 6px;
+}
 
+.email-btn {
+  background: #7c3aed;
+  color: #fff;
+  border: none;
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-right: 6px;
+}
   .line-items-table-header,
   .line-items-table-row,
   .expense-item-row {
