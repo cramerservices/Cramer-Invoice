@@ -6,7 +6,7 @@ function Hours() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  const [approvedEstimates, setApprovedEstimates] = useState([]);
+  const [approvedEstimates, setApprovedEstimates] = useState([]); 
   const [techs, setTechs] = useState([]);
   const [runningJobs, setRunningJobs] = useState([]);
   const [recentHours, setRecentHours] = useState([]);
