@@ -1299,59 +1299,55 @@ function Estimates() {
   };
 
   const handleEmailEstimateClick = async (estimateId: string) => {
-    try {
-      setEmailBusyId(estimateId);
+  try {
+    setEmailBusyId(estimateId);
 
-      const { data: estimate, error } = await supabase
-        .from('estimates')
-        .select('*, customers(*)')
-        .eq('id', estimateId)
-        .single();
+    const { data: estimate, error } = await supabase
+      .from('estimates')
+      .select('*, customers(*)')
+      .eq('id', estimateId)
+      .single();
 
-      if (error) throw error;
+    if (error) throw error;
 
-      const typedEstimate = estimate as EstimateRow;
-      const customerEmail = typedEstimate.customers?.email?.trim() || '';
-      const customerName = typedEstimate.customers?.name?.trim() || 'Customer';
+    const typedEstimate = estimate as EstimateRow;
+    const customerEmail = typedEstimate.customers?.email?.trim() || '';
+    const customerName = typedEstimate.customers?.name?.trim() || 'Customer';
 
-      if (!customerEmail) {
-        throw new Error('This customer does not have an email address saved.');
-      }
-
-      const pdfUrl = await generateAndUploadEstimatePdf(estimateId, false);
-      const totalAmount = Number(typedEstimate.total_amount || 0).toFixed(2);
-      const depositPercentage = calculateDepositPercentage(typedEstimate.deposit_percent);
-      const depositAmount = calculateDepositAmount(Number(typedEstimate.total_amount || 0), depositPercentage).toFixed(2);
-
-      const subject = `Estimate ${typedEstimate.estimate_number} from ${COMPANY.name}`;
-
-      const body = `Hi ${customerName},
-
-Attached is your estimate from ${COMPANY.name}.
-
-Estimate Number: ${typedEstimate.estimate_number}
-Estimate Amount: $${totalAmount}
-Required Deposit (${depositPercentage.toFixed(0)}%): $${depositAmount}
-
-Please review the estimate and let me know if you have any questions. If everything looks good, you can reply to approve the estimate and we can move forward with scheduling.
-
-Estimate PDF:
-${pdfUrl || ''}
-
-Thank you,
-${COMPANY.name}
-${COMPANY.phone}
-${COMPANY.email}`;
-
-      const mailto = `mailto:${encodeURIComponent(customerEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-      window.location.href = mailto;
-    } catch (error: any) {
-      console.error('Error creating estimate email:', error);
-      alert(`Failed to prepare email: ${error?.message || 'Unknown error'}`);
-    } finally {
-      setEmailBusyId(null);
+    if (!customerEmail) {
+      throw new Error('This customer does not have an email address saved.');
     }
-  };
+
+    const pdfUrl = await generateAndUploadEstimatePdf(estimateId, false);
+
+    const totalAmount = Number(typedEstimate.total_amount || 0);
+    const depositPercentage = calculateDepositPercentage(typedEstimate.deposit_percent);
+    const depositAmount = calculateDepositAmount(totalAmount, depositPercentage);
+
+    const { data, error: fnError } = await supabase.functions.invoke('send-estimate-email', {
+      body: {
+        to: customerEmail,
+        customerName,
+        estimateNumber: typedEstimate.estimate_number,
+        totalAmount,
+        depositAmount,
+        pdfUrl,
+      },
+    });
+
+    if (fnError) throw fnError;
+    if (!data?.success) {
+      throw new Error(data?.error || 'Email send failed');
+    }
+
+    alert('Estimate email sent successfully.');
+  } catch (error: any) {
+    console.error('Error sending estimate email:', error);
+    alert(`Failed to send email: ${error?.message || 'Unknown error'}`);
+  } finally {
+    setEmailBusyId(null);
+  }
+};
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1917,17 +1913,17 @@ ${COMPANY.email}`;
                       {estimate.status === 'approved' && (
                         <>
                           <button
-                            className="btn-small"
-                            style={{
-                              backgroundColor: '#2563eb',
-                              color: '#fff',
-                              border: 'none'
-                            }}
-                            onClick={() => handleCreateInvoiceClick(estimate.id)}
-                            disabled={invoiceBusyId === estimate.id}
-                          >
-                            {invoiceBusyId === estimate.id ? 'Creating...' : 'Create Invoice'}
-                          </button>
+  className="btn-small"
+  style={{
+    backgroundColor: '#7c3aed',
+    color: '#fff',
+    border: 'none'
+  }}
+  onClick={() => handleEmailEstimateClick(estimate.id)}
+  disabled={emailBusyId === estimate.id}
+>
+  {emailBusyId === estimate.id ? 'Sending...' : 'Email Estimate'}
+</button>
 
                           <button
                             className="btn-small"
