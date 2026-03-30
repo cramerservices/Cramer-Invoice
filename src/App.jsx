@@ -7,7 +7,7 @@ import Invoices from './pages/Invoices';
 import Payments from './pages/Payments';
 import './App.css';
 import Hours from './pages/Hours';
-
+ 
 function App() {
   const [currentPage, setCurrentPage] = useState('dashboard');
 
