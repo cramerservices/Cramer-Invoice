@@ -60,8 +60,8 @@ function Dashboard() {
         .select('id', { count: 'exact', head: true }),
 
       supabase
-        .from('crm_invoices')
-        .select('id, customer_id, estimate_id, estimate_number, total_amount, amount_paid, amount_due, invoice_number, status, created_at, invoice_date, due_date'),
+      .from('crm_invoices')
+.select('id, customer_id, estimate_id, total_amount, amount_paid, amount_due, invoice_number, status, created_at, invoice_date, due_date')
 
       supabase
         .from('estimates')
@@ -189,13 +189,16 @@ function Dashboard() {
       revenueByEstimate[inv.estimate_id] =
         (revenueByEstimate[inv.estimate_id] || 0) + Number(inv.total_amount || 0);
 
-      estimateNumbers[inv.estimate_id] =
-        inv.estimate_number || estimateNumbers[inv.estimate_id];
+      allInvoicesWithCustomer.forEach((inv) => {
+  if (!inv.estimate_id) return;
 
-      if (inv.customers?.name) {
-        customerNamesByEstimate[inv.estimate_id] = inv.customers.name;
-      }
-    });
+  revenueByEstimate[inv.estimate_id] =
+    (revenueByEstimate[inv.estimate_id] || 0) + Number(inv.total_amount || 0);
+
+  if (inv.customers?.name) {
+    customerNamesByEstimate[inv.estimate_id] = inv.customers.name;
+  }
+});
 
     allExpenses.forEach((exp) => {
       if (!exp.estimate_id) return;
@@ -670,7 +673,7 @@ function Dashboard() {
       return (
         <div className="detail-stack">
           <div className="detail-card">
-            <div className="detail-row"><strong>Estimate #:</strong> <span>{selectedData.estimate_number || '-'}</span></div>
+<div className="detail-row"><strong>Estimate ID:</strong> <span>{selectedData.estimate_id || '-'}</span></div>
             <div className="detail-row"><strong>Customer:</strong> <span>{selectedData.customers?.name || '-'}</span></div>
             <div className="detail-row"><strong>Status:</strong> <span>{selectedData.status || '-'}</span></div>
             <div className="detail-row"><strong>Total:</strong> <span>{formatCurrency(selectedData.total_amount)}</span></div>
