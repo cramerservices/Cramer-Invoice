@@ -608,7 +608,7 @@ function Dashboard() {
       return (
         <div className="detail-stack">
           <div className="detail-card">
-<div className="detail-row"><strong>Estimate ID:</strong> <span>{selectedData.estimate_id || '-'}</span></div>
+<div className="detail-row"><strong>Estimate #:</strong> <span>{selectedData.estimate_id || '-'}</span></div>
             <div className="detail-row"><strong>Customer:</strong> <span>{selectedData.customers?.name || '-'}</span></div>
             <div className="detail-row"><strong>Status:</strong> <span>{selectedData.status || '-'}</span></div>
             <div className="detail-row"><strong>Total:</strong> <span>{formatCurrency(selectedData.total_amount)}</span></div>
