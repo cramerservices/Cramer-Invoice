@@ -1319,7 +1319,6 @@ const handleEmailEstimateClick = async (estimateId: string) => {
     }
 
     const pdfUrl = await generateAndUploadEstimatePdf(estimateId, false);
-
     const totalAmount = Number(typedEstimate.total_amount || 0);
     const depositPercentage = calculateDepositPercentage(typedEstimate.deposit_percent);
     const depositAmount = calculateDepositAmount(totalAmount, depositPercentage);
@@ -1335,8 +1334,13 @@ const handleEmailEstimateClick = async (estimateId: string) => {
       },
     });
 
-    if (fnError) throw fnError;
+    if (fnError) {
+      console.error('Function invoke error:', fnError);
+      throw fnError;
+    }
+
     if (!data?.success) {
+      console.error('Function returned failure:', data);
       throw new Error(data?.error || 'Email send failed');
     }
 
