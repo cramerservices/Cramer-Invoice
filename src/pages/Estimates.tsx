@@ -1323,16 +1323,27 @@ const handleEmailEstimateClick = async (estimateId: string) => {
     const depositPercentage = calculateDepositPercentage(typedEstimate.deposit_percent);
     const depositAmount = calculateDepositAmount(totalAmount, depositPercentage);
 
-    const { data, error: fnError } = await supabase.functions.invoke('send-estimate-email', {
-      body: {
-        to: customerEmail,
-        customerName,
-        estimateNumber: typedEstimate.estimate_number,
-        totalAmount,
-        depositAmount,
-        pdfUrl,
-      },
-    });
+  const { data: sessionData } = await supabase.auth.getSession();
+
+const { data, error: fnError } = await supabase.functions.invoke(
+  'send-estimate-email',
+  {
+    body: {
+      to: customerEmail,
+      customerName,
+      estimateNumber: typedEstimate.estimate_number,
+      totalAmount,
+      depositAmount,
+      pdfUrl,
+    },
+    headers: {
+      Authorization: `Bearer ${
+        sessionData.session?.access_token ??
+        import.meta.env.VITE_SUPABASE_ANON_KEY
+      }`,
+    },
+  }
+);
 
     if (fnError) {
       console.error('Function invoke error:', fnError);
