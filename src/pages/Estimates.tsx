@@ -1310,55 +1310,57 @@ const handleEmailEstimateClick = async (estimateId: string) => {
 
     if (error) throw error;
 
-    const typedEstimate = estimate as EstimateRow;
+    const typedEstimate = estimate as any;
+
     const customerEmail = typedEstimate.customers?.email?.trim() || '';
     const customerName = typedEstimate.customers?.name?.trim() || 'Customer';
 
     if (!customerEmail) {
-      throw new Error('This customer does not have an email address saved.');
+      throw new Error('Customer does not have an email address.');
     }
 
+    // generate PDF (you already have this function)
     const pdfUrl = await generateAndUploadEstimatePdf(estimateId, false);
+
     const totalAmount = Number(typedEstimate.total_amount || 0);
-    const depositPercentage = calculateDepositPercentage(typedEstimate.deposit_percent);
-    const depositAmount = calculateDepositAmount(totalAmount, depositPercentage);
+    const depositPercent = Number(typedEstimate.deposit_percent || 0);
+    const depositAmount = (totalAmount * depositPercent) / 100;
 
-  const { data: sessionData } = await supabase.auth.getSession();
+    // 🚨 IMPORTANT: RAW FETCH (NOT supabase.functions.invoke)
+    const response = await fetch(
+      'https://qsiimareoiyrkompuobi.supabase.co/functions/v1/send-estimate-email',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+        },
+        body: JSON.stringify({
+          to: customerEmail,
+          customerName,
+          estimateNumber: typedEstimate.estimate_number,
+          totalAmount,
+          depositAmount,
+          pdfUrl,
+        }),
+      }
+    );
 
-const { data, error: fnError } = await supabase.functions.invoke(
-  'send-estimate-email',
-  {
-    body: {
-      to: customerEmail,
-      customerName,
-      estimateNumber: typedEstimate.estimate_number,
-      totalAmount,
-      depositAmount,
-      pdfUrl,
-    },
-    headers: {
-      Authorization: `Bearer ${
-        sessionData.session?.access_token ??
-        import.meta.env.VITE_SUPABASE_ANON_KEY
-      }`,
-    },
-  }
-);
+    const data = await response.json().catch(() => ({}));
 
-    if (fnError) {
-      console.error('Function invoke error:', fnError);
-      throw fnError;
+    if (!response.ok) {
+      console.error('Function error:', data);
+      throw new Error(data?.error || 'Failed to send email');
     }
 
     if (!data?.success) {
-      console.error('Function returned failure:', data);
-      throw new Error(data?.error || 'Email send failed');
+      throw new Error(data?.error || 'Email failed');
     }
 
     alert('Estimate email sent successfully.');
-  } catch (error: any) {
-    console.error('Error sending estimate email:', error);
-    alert(`Failed to send email: ${error?.message || 'Unknown error'}`);
+  } catch (err: any) {
+    console.error(err);
+    alert(`Failed to send email: ${err?.message || 'Unknown error'}`);
   } finally {
     setEmailBusyId(null);
   }
