@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import './Dashboard.css';
 
-function Dashboard({ setCurrentPage }) {
+function Dashboard() {
   const [stats, setStats] = useState({
     totalCustomers: 0,
     totalEstimates: 0,
@@ -33,214 +33,196 @@ function Dashboard({ setCurrentPage }) {
     fetchDashboardData();
   }, []);
 
-  const fetchDashboardData = async () => {
-    try {
-      setLoading(true);
+ const fetchDashboardData = async () => {
+  try {
+    setLoading(true);
 
-      const [
-        customersRes,
-        estimatesCountRes,
-        invoicesTotalsRes,
-        recentEstimatesRes,
-        recentInvoicesRes,
-        recentHoursRes,
-        recentExpensesRes,
-        allExpensesRes,
-        allHoursRes,
-        allEstimatesRes
-      ] = await Promise.all([
-        supabase
-          .from('customers')
-          .select('id', { count: 'exact', head: true }),
+    const [
+      customersRes,
+      estimatesCountRes,
+      invoicesTotalsRes,
+      recentEstimatesRes,
+      recentInvoicesRes,
+      recentHoursRes,
+      recentExpensesRes,
+      allExpensesRes,
+      allHoursRes
+    ] = await Promise.all([
+      supabase
+        .from('customers')
+        .select('id', { count: 'exact', head: true }),
 
-        supabase
-          .from('estimates')
-          .select('id', { count: 'exact', head: true }),
+      supabase
+        .from('estimates')
+        .select('id', { count: 'exact', head: true }),
 
-        supabase
-          .from('crm_invoices')
-          .select('id, estimate_id, total_amount, amount_paid, amount_due, created_at, invoice_number, status, customers(name)', { count: 'exact' }),
+      supabase
+        .from('crm_invoices')
+        .select('id, estimate_id, total_amount, amount_paid, amount_due', { count: 'exact' }),
 
-        supabase
-          .from('estimates')
-          .select('*, customers(name)')
-          .order('created_at', { ascending: false })
-          .limit(5),
+      supabase
+        .from('estimates')
+        .select('*, customers(name)')
+        .order('created_at', { ascending: false })
+        .limit(5),
 
-        supabase
-          .from('crm_invoices')
-          .select('*, customers(name)')
-          .order('created_at', { ascending: false })
-          .limit(5),
+      supabase
+        .from('crm_invoices')
+        .select('*, customers(name)')
+        .order('created_at', { ascending: false })
+        .limit(5),
 
-        supabase
-          .from('job_hours')
-          .select('*')
-          .neq('status', 'running')
-          .order('created_at', { ascending: false })
-          .limit(5),
+      supabase
+        .from('job_hours')
+        .select('*')
+        .neq('status', 'running')
+        .order('created_at', { ascending: false })
+        .limit(5),
 
-        supabase
-          .from('job_expenses')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(5),
+      supabase
+        .from('job_expenses')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(5),
 
-        supabase
-          .from('job_expenses')
-          .select('id, estimate_id, estimate_number, total_amount, tech_name, category, expense_date, created_at, description'),
+      supabase
+        .from('job_expenses')
+        .select('id, estimate_id, estimate_number, total_amount'),
 
-        supabase
-          .from('job_hours')
-          .select('id, estimate_id, estimate_number, total_hours, tech_name, work_date, created_at, updated_at, notes, status')
-          .neq('status', 'running'),
+      supabase
+        .from('job_hours')
+        .select('id, estimate_id, estimate_number, total_hours')
+        .neq('status', 'running')
+    ]);
 
-        supabase
-          .from('estimates')
-          .select('*, customers(name)')
-          .order('created_at', { ascending: false })
-      ]);
+    if (customersRes.error) throw customersRes.error;
+    if (estimatesCountRes.error) throw estimatesCountRes.error;
+    if (invoicesTotalsRes.error) throw invoicesTotalsRes.error;
+    if (recentEstimatesRes.error) throw recentEstimatesRes.error;
+    if (recentInvoicesRes.error) throw recentInvoicesRes.error;
+    if (recentHoursRes.error) throw recentHoursRes.error;
+    if (recentExpensesRes.error) throw recentExpensesRes.error;
+    if (allExpensesRes.error) throw allExpensesRes.error;
+    if (allHoursRes.error) throw allHoursRes.error;
 
-      if (customersRes.error) throw customersRes.error;
-      if (estimatesCountRes.error) throw estimatesCountRes.error;
-      if (invoicesTotalsRes.error) throw invoicesTotalsRes.error;
-      if (recentEstimatesRes.error) throw recentEstimatesRes.error;
-      if (recentInvoicesRes.error) throw recentInvoicesRes.error;
-      if (recentHoursRes.error) throw recentHoursRes.error;
-      if (recentExpensesRes.error) throw recentExpensesRes.error;
-      if (allExpensesRes.error) throw allExpensesRes.error;
-      if (allHoursRes.error) throw allHoursRes.error;
-      if (allEstimatesRes.error) throw allEstimatesRes.error;
+    const allInvoices = invoicesTotalsRes.data || [];
+    const allExpenses = allExpensesRes.data || [];
+    const allHours = allHoursRes.data || [];
 
-      const allInvoices = invoicesTotalsRes.data || [];
-      const allExpenses = allExpensesRes.data || [];
-      const allHours = allHoursRes.data || [];
-      const allEstimates = allEstimatesRes.data || [];
+    const totalRevenue = allInvoices.reduce(
+      (sum, inv) => sum + parseFloat(inv.total_amount || 0),
+      0
+    );
 
-      const totalRevenue = allInvoices.reduce(
-        (sum, inv) => sum + parseFloat(inv.total_amount || 0),
-        0
-      );
+    const paidAmount = allInvoices.reduce(
+      (sum, inv) => sum + parseFloat(inv.amount_paid || 0),
+      0
+    );
 
-      const paidAmount = allInvoices.reduce(
-        (sum, inv) => sum + parseFloat(inv.amount_paid || 0),
-        0
-      );
+    const pendingAmount = allInvoices.reduce(
+      (sum, inv) => sum + parseFloat(inv.amount_due || 0),
+      0
+    );
 
-      const pendingAmount = allInvoices.reduce(
-        (sum, inv) => sum + parseFloat(inv.amount_due || 0),
-        0
-      );
+    const totalExpenses = allExpenses.reduce(
+      (sum, exp) => sum + parseFloat(exp.total_amount || 0),
+      0
+    );
 
-      const totalExpenses = allExpenses.reduce(
-        (sum, exp) => sum + parseFloat(exp.total_amount || 0),
-        0
-      );
+    const totalHours = allHours.reduce(
+      (sum, row) => sum + parseFloat(row.total_hours || 0),
+      0
+    );
 
-      const totalHours = allHours.reduce(
-        (sum, row) => sum + parseFloat(row.total_hours || 0),
-        0
-      );
+    const totalProfit = totalRevenue - totalExpenses;
+    const profitPerHour = totalHours > 0 ? totalProfit / totalHours : 0;
 
-      const totalProfit = totalRevenue - totalExpenses;
-      const profitPerHour = totalHours > 0 ? totalProfit / totalHours : 0;
+    const revenueByEstimate = {};
+    const expenseByEstimate = {};
+    const hoursByEstimate = {};
 
-      const revenueByEstimate = {};
-      const expenseByEstimate = {};
-      const hoursByEstimate = {};
-      const estimateNumbers = {};
-      const estimateCustomers = {};
+    allInvoices.forEach((inv) => {
+      if (!inv.estimate_id) return;
+      revenueByEstimate[inv.estimate_id] =
+        (revenueByEstimate[inv.estimate_id] || 0) + Number(inv.total_amount || 0);
+    });
 
-      allInvoices.forEach((inv) => {
-        if (!inv.estimate_id) return;
-        revenueByEstimate[inv.estimate_id] =
-          (revenueByEstimate[inv.estimate_id] || 0) + Number(inv.total_amount || 0);
-      });
+    allExpenses.forEach((exp) => {
+      if (!exp.estimate_id) return;
+      expenseByEstimate[exp.estimate_id] =
+        (expenseByEstimate[exp.estimate_id] || 0) + Number(exp.total_amount || 0);
+    });
 
-      allExpenses.forEach((exp) => {
-        if (!exp.estimate_id) return;
-        expenseByEstimate[exp.estimate_id] =
-          (expenseByEstimate[exp.estimate_id] || 0) + Number(exp.total_amount || 0);
+    allHours.forEach((row) => {
+      if (!row.estimate_id) return;
+      hoursByEstimate[row.estimate_id] =
+        (hoursByEstimate[row.estimate_id] || 0) + Number(row.total_hours || 0);
+    });
 
-        if (exp.estimate_id) {
-          estimateNumbers[exp.estimate_id] =
-            exp.estimate_number || estimateNumbers[exp.estimate_id];
-        }
-      });
+    const estimateNumbers = {};
+    allExpenses.forEach((exp) => {
+      if (exp.estimate_id) {
+        estimateNumbers[exp.estimate_id] = exp.estimate_number || estimateNumbers[exp.estimate_id];
+      }
+    });
+    allHours.forEach((row) => {
+      if (row.estimate_id) {
+        estimateNumbers[row.estimate_id] = row.estimate_number || estimateNumbers[row.estimate_id];
+      }
+    });
 
-      allHours.forEach((row) => {
-        if (!row.estimate_id) return;
-        hoursByEstimate[row.estimate_id] =
-          (hoursByEstimate[row.estimate_id] || 0) + Number(row.total_hours || 0);
+    const allEstimateIds = Array.from(
+      new Set([
+        ...Object.keys(revenueByEstimate),
+        ...Object.keys(expenseByEstimate),
+        ...Object.keys(hoursByEstimate)
+      ])
+    );
 
-        if (row.estimate_id) {
-          estimateNumbers[row.estimate_id] =
-            row.estimate_number || estimateNumbers[row.estimate_id];
-        }
-      });
+    const jobMetrics = allEstimateIds
+      .map((estimateId) => {
+        const revenue = revenueByEstimate[estimateId] || 0;
+        const expenses = expenseByEstimate[estimateId] || 0;
+        const hours = hoursByEstimate[estimateId] || 0;
+        const profit = revenue - expenses;
+        const profitPerHourValue = hours > 0 ? profit / hours : 0;
 
-      allEstimates.forEach((est) => {
-        estimateNumbers[est.id] = est.estimate_number || estimateNumbers[est.id];
-        estimateCustomers[est.id] = est.customers?.name || 'Unknown Customer';
-      });
+        return {
+          estimate_id: estimateId,
+          estimate_number: estimateNumbers[estimateId] || 'Unknown Estimate',
+          revenue,
+          expenses,
+          hours,
+          profit,
+          profitPerHour: profitPerHourValue
+        };
+      })
+      .sort((a, b) => b.profit - a.profit)
+      .slice(0, 5);
 
-      const allEstimateIds = Array.from(
-        new Set([
-          ...Object.keys(revenueByEstimate),
-          ...Object.keys(expenseByEstimate),
-          ...Object.keys(hoursByEstimate)
-        ])
-      );
-
-      const jobMetrics = allEstimateIds
-        .map((estimateId) => {
-          const revenue = revenueByEstimate[estimateId] || 0;
-          const expenses = expenseByEstimate[estimateId] || 0;
-          const hours = hoursByEstimate[estimateId] || 0;
-          const profit = revenue - expenses;
-          const profitPerHourValue = hours > 0 ? profit / hours : 0;
-
-          return {
-            estimate_id: estimateId,
-            estimate_number: estimateNumbers[estimateId] || 'Unknown Estimate',
-            customer_name: estimateCustomers[estimateId] || 'Unknown Customer',
-            revenue,
-            expenses,
-            hours,
-            profit,
-            profitPerHour: profitPerHourValue
-          };
-        })
-        .sort((a, b) => b.profit - a.profit)
-        .slice(0, 5);
-
-      setStats({
-        totalCustomers: customersRes.count || 0,
-        totalEstimates: estimatesCountRes.count || 0,
-        totalInvoices: invoicesTotalsRes.count || 0,
-        totalRevenue,
-        paidAmount,
-        pendingAmount,
-        totalExpenses,
-        totalHours,
-        totalProfit,
-        profitPerHour,
-        recentEstimates: recentEstimatesRes.data || [],
-        recentInvoices: recentInvoicesRes.data || [],
-        recentHours: recentHoursRes.data || [],
-        recentExpenses: recentExpensesRes.data || [],
-        jobMetrics,
-        allInvoices,
-        allEstimates,
-        allHours,
-        allExpenses
-      });
-    } catch (error) {
-      console.error('Error fetching dashboard data:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+    setStats({
+      totalCustomers: customersRes.count || 0,
+      totalEstimates: estimatesCountRes.count || 0,
+      totalInvoices: invoicesTotalsRes.count || 0,
+      totalRevenue,
+      paidAmount,
+      pendingAmount,
+      totalExpenses,
+      totalHours,
+      totalProfit,
+      profitPerHour,
+      recentEstimates: recentEstimatesRes.data || [],
+      recentInvoices: recentInvoicesRes.data || [],
+      recentHours: recentHoursRes.data || [],
+      recentExpenses: recentExpensesRes.data || [],
+      jobMetrics
+    });
+  } catch (error) {
+    console.error('Error fetching dashboard data:', error);
+  } finally {
+    setLoading(false);
+  }
+};
 
   const formatCurrency = (amount) => {
     return `$${parseFloat(amount || 0).toFixed(2)}`;
@@ -258,12 +240,6 @@ function Dashboard({ setCurrentPage }) {
       day: 'numeric',
       year: 'numeric'
     });
-  };
-
-  const goToPage = (pageName) => {
-    if (typeof setCurrentPage === 'function') {
-      setCurrentPage(pageName);
-    }
   };
 
   const openMetricView = (view) => {
@@ -628,21 +604,21 @@ function Dashboard({ setCurrentPage }) {
       );
     }
 
-    if (selectedView === 'estimate_detail' && selectedData) {
-      return (
-        <div className="detail-stack">
-          <div className="detail-card">
-            <div className="detail-row"><strong>Estimate #:</strong> <span>{selectedData.estimate_number || '-'}</span></div>
-            <div className="detail-row"><strong>Customer:</strong> <span>{selectedData.customers?.name || '-'}</span></div>
-            <div className="detail-row"><strong>Status:</strong> <span>{selectedData.status || '-'}</span></div>
-            <div className="detail-row"><strong>Total:</strong> <span>{formatCurrency(selectedData.total_amount)}</span></div>
-            <div className="detail-row"><strong>Created:</strong> <span>{formatDate(selectedData.created_at)}</span></div>
-            <div className="detail-row"><strong>Updated:</strong> <span>{formatDate(selectedData.updated_at)}</span></div>
-            <div className="detail-row"><strong>Description:</strong> <span>{selectedData.description || '-'}</span></div>
-          </div>
-        </div>
-      );
-    }
+  if (selectedView === 'estimate_detail' && selectedData) {
+  return (
+    <div className="detail-stack">
+      <div className="detail-card">
+<div className="detail-row"><strong>Estimate #:</strong> <span>{selectedData.estimate_number || '-'}</span></div>
+        <div className="detail-row"><strong>Customer:</strong> <span>{selectedData.customers?.name || '-'}</span></div>
+        <div className="detail-row"><strong>Status:</strong> <span>{selectedData.status || '-'}</span></div>
+        <div className="detail-row"><strong>Total:</strong> <span>{formatCurrency(selectedData.total_amount)}</span></div>
+        <div className="detail-row"><strong>Created:</strong> <span>{formatDate(selectedData.created_at)}</span></div>
+        <div className="detail-row"><strong>Updated:</strong> <span>{formatDate(selectedData.updated_at)}</span></div>
+        <div className="detail-row"><strong>Description:</strong> <span>{selectedData.description || '-'}</span></div>
+      </div>
+    </div>
+  );
+}
 
     if (selectedView === 'invoice_detail' && selectedData) {
       return (
@@ -770,7 +746,7 @@ function Dashboard({ setCurrentPage }) {
       <h2 className="dashboard-title">Dashboard</h2>
 
       <div className="stats-grid">
-        <div className="stat-card clickable" onClick={() => goToPage('customers')}>
+        <div className="stat-card clickable" onClick={() => openMetricView('customers')}>
           <div className="stat-icon" style={{ backgroundColor: '#d4edff' }}>
             <span style={{ color: '#2980b9' }}>👥</span>
           </div>
@@ -780,7 +756,7 @@ function Dashboard({ setCurrentPage }) {
           </div>
         </div>
 
-        <div className="stat-card clickable" onClick={() => goToPage('estimates')}>
+        <div className="stat-card clickable" onClick={() => openMetricView('estimates')}>
           <div className="stat-icon" style={{ backgroundColor: '#fff3cd' }}>
             <span style={{ color: '#f39c12' }}>📄</span>
           </div>
@@ -790,7 +766,7 @@ function Dashboard({ setCurrentPage }) {
           </div>
         </div>
 
-        <div className="stat-card clickable" onClick={() => goToPage('invoices')}>
+        <div className="stat-card clickable" onClick={() => openMetricView('invoices')}>
           <div className="stat-icon" style={{ backgroundColor: '#d5f4e6' }}>
             <span style={{ color: '#27ae60' }}>📋</span>
           </div>
@@ -800,7 +776,7 @@ function Dashboard({ setCurrentPage }) {
           </div>
         </div>
 
-        <div className="stat-card clickable" onClick={() => goToPage('payments')}>
+        <div className="stat-card clickable" onClick={() => openMetricView('paid')}>
           <div className="stat-icon" style={{ backgroundColor: '#d5f4e6' }}>
             <span style={{ color: '#27ae60' }}>💰</span>
           </div>
@@ -810,7 +786,7 @@ function Dashboard({ setCurrentPage }) {
           </div>
         </div>
 
-        <div className="stat-card clickable" onClick={() => goToPage('payments')}>
+        <div className="stat-card clickable" onClick={() => openMetricView('pending')}>
           <div className="stat-icon" style={{ backgroundColor: '#fadbd8' }}>
             <span style={{ color: '#e74c3c' }}>⏳</span>
           </div>
@@ -830,7 +806,7 @@ function Dashboard({ setCurrentPage }) {
           </div>
         </div>
 
-        <div className="stat-card clickable" onClick={() => goToPage('expenses')}>
+        <div className="stat-card clickable" onClick={() => openMetricView('expenses')}>
           <div className="stat-icon" style={{ backgroundColor: '#fdebd0' }}>
             <span style={{ color: '#d35400' }}>🧾</span>
           </div>
@@ -840,7 +816,7 @@ function Dashboard({ setCurrentPage }) {
           </div>
         </div>
 
-        <div className="stat-card clickable" onClick={() => goToPage('jobhours')}>
+        <div className="stat-card clickable" onClick={() => openMetricView('hours')}>
           <div className="stat-icon" style={{ backgroundColor: '#ebf5fb' }}>
             <span style={{ color: '#2471a3' }}>⏱️</span>
           </div>
@@ -850,7 +826,7 @@ function Dashboard({ setCurrentPage }) {
           </div>
         </div>
 
-        <div className="stat-card clickable" onClick={() => goToPage('expenses')}>
+        <div className="stat-card clickable" onClick={() => openMetricView('profit')}>
           <div className="stat-icon" style={{ backgroundColor: '#e8f8f5' }}>
             <span style={{ color: '#148f77' }}>📈</span>
           </div>
@@ -860,7 +836,7 @@ function Dashboard({ setCurrentPage }) {
           </div>
         </div>
 
-        <div className="stat-card clickable" onClick={() => goToPage('jobhours')}>
+        <div className="stat-card clickable" onClick={() => openMetricView('profitPerHour')}>
           <div className="stat-icon" style={{ backgroundColor: '#f5eef8' }}>
             <span style={{ color: '#7d3c98' }}>⚙️</span>
           </div>
