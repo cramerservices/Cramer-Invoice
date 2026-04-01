@@ -1,1055 +1,1227 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import './Dashboard.css';
+import { jsPDF } from 'jspdf';
+import './Customers.css';
 
-function Dashboard({ setCurrentPage }) {
-  const [stats, setStats] = useState({
-    totalCustomers: 0,
-    totalEstimates: 0,
-    totalInvoices: 0,
-    totalRevenue: 0,
-    paidAmount: 0,
-    pendingAmount: 0,
-    totalExpenses: 0,
-    totalHours: 0,
-    totalProfit: 0,
-    profitPerHour: 0,
-    recentInvoices: [],
-    recentEstimates: [],
-    recentHours: [],
-    recentExpenses: [],
-    jobMetrics: [],
-    allInvoices: [],
-    allEstimates: [],
-    allHours: [],
-    allExpenses: []
+const COMPANY = {
+  name: 'Cramer Services LLC',
+  phone: '314-267-8594',
+  email: 'cramerservicesllc@gmail.com',
+  website: 'www.cramerservicesllc.com'
+};
+
+const LOGO_URL = `${import.meta.env.BASE_URL}CramerLogoText.png`;
+const PDF_BUCKET = 'service-docs';
+
+async function fetchImageAsDataURL(url: string) {
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`Logo fetch failed: ${res.status}`);
+  const blob = await res.blob();
+
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function uploadPdfToStorage({
+  fileName,
+  pdfBlob
+}: {
+  fileName: string;
+  pdfBlob: Blob;
+}) {
+  const storagePath = `crm/${Date.now()}-${fileName}`;
+
+  const { error: uploadError } = await supabase.storage
+    .from(PDF_BUCKET)
+    .upload(storagePath, pdfBlob, {
+      contentType: 'application/pdf',
+      upsert: true
+    });
+
+  if (uploadError) throw uploadError;
+
+  const { data: publicUrlData } = supabase.storage
+    .from(PDF_BUCKET)
+    .getPublicUrl(storagePath);
+
+  return {
+    storagePath,
+    publicUrl: publicUrlData?.publicUrl || null
+  };
+}
+
+type InvoiceRow = {
+  id: string;
+  invoice_number: string;
+  customer_id: string;
+  estimate_id?: string | null;
+  invoice_date: string;
+  due_date: string | null;
+  work_completed_date: string | null;
+  tech_name: string | null;
+  notes: string | null;
+  status: string;
+  total_amount: number | string;
+  amount_paid: number | string;
+  amount_due: number | string;
+  pdf_url?: string | null;
+  pdf_path?: string | null;
+  customers?: {
+    name?: string | null;
+    address?: string | null;
+    email?: string | null;
+    phone?: string | null;
+  } | null;
+};
+
+type InvoiceLineItem = {
+  invoice_id: string;
+  description: string;
+  material_cost: number | string;
+  labor_cost: number | string;
+  total_cost: number | string;
+  sort_order?: number;
+};
+
+type PaymentRow = {
+  payment_date: string;
+  amount: number | string;
+  payment_method?: string | null;
+  reference_number?: string | null;
+};
+
+function Invoices() {
+  const [invoices, setInvoices] = useState<any[]>([]);
+  const [customers, setCustomers] = useState<any[]>([]);
+  const [showForm, setShowForm] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [pdfBusyId, setPdfBusyId] = useState<string | null>(null);
+  const [emailBusyId, setEmailBusyId] = useState<string | null>(null);
+
+  const [formData, setFormData] = useState({
+    invoiceNumber: '',
+    customerId: '',
+    invoiceDate: new Date().toISOString().split('T')[0],
+    dueDate: '',
+    workCompletedDate: '',
+    techName: '',
+    notes: '',
+    status: 'draft'
   });
 
-  const [loading, setLoading] = useState(true);
-  const [selectedView, setSelectedView] = useState(null);
-  const [selectedData, setSelectedData] = useState(null);
+  const [lineItems, setLineItems] = useState([
+    { description: '', materialCost: '', laborCost: '' }
+  ]);
 
   useEffect(() => {
-    fetchDashboardData();
+    fetchData();
   }, []);
 
-  const fetchDashboardData = async () => {
-    try {
-      setLoading(true);
+  useEffect(() => {
+    if (showForm) {
+      generateInvoiceNumber();
+    }
+  }, [showForm]);
 
-      const [
-        customersRes,
-        estimatesCountRes,
-        invoicesTotalsRes,
-        recentEstimatesRes,
-        recentInvoicesRes,
-        recentHoursRes,
-        recentExpensesRes,
-        allExpensesRes,
-        allHoursRes
-      ] = await Promise.all([
+  const generateInvoiceNumber = async () => {
+    try {
+      let newNumber = '';
+      let isUnique = false;
+
+      while (!isUnique) {
+        const randomNum = Math.floor(Math.random() * 9000) + 1000;
+        newNumber = `INV-${randomNum}`;
+
+        const { data, error } = await supabase
+          .from('crm_invoices')
+          .select('invoice_number')
+          .eq('invoice_number', newNumber)
+          .limit(1);
+
+        if (error) throw error;
+
+        if (!data || data.length === 0) {
+          isUnique = true;
+        }
+      }
+
+      setFormData((prev) => ({ ...prev, invoiceNumber: newNumber }));
+    } catch (error) {
+      console.error('Error generating invoice number:', error);
+    }
+  };
+
+  const fetchData = async () => {
+    try {
+      const [invoicesRes, customersRes] = await Promise.all([
+        supabase
+          .from('crm_invoices')
+          .select('*, customers(*)')
+          .order('created_at', { ascending: false }),
         supabase
           .from('customers')
-          .select('id', { count: 'exact', head: true }),
-
-        supabase
-          .from('estimates')
-          .select('id', { count: 'exact', head: true }),
-
-        supabase
-          .from('crm_invoices')
-          .select('id, estimate_id, total_amount, amount_paid, amount_due', { count: 'exact' }),
-
-        supabase
-          .from('estimates')
-          .select('*, customers(name)')
-          .order('created_at', { ascending: false })
-          .limit(5),
-
-        supabase
-          .from('crm_invoices')
-          .select('*, customers(name)')
-          .order('created_at', { ascending: false })
-          .limit(5),
-
-        supabase
-          .from('job_hours')
           .select('*')
-          .neq('status', 'running')
-          .order('created_at', { ascending: false })
-          .limit(5),
-
-        supabase
-          .from('job_expenses')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(5),
-
-        supabase
-          .from('job_expenses')
-          .select('id, estimate_id, estimate_number, total_amount'),
-
-        supabase
-          .from('job_hours')
-          .select('id, estimate_id, estimate_number, total_hours')
-          .neq('status', 'running')
+          .order('name')
       ]);
 
+      if (invoicesRes.error) throw invoicesRes.error;
       if (customersRes.error) throw customersRes.error;
-      if (estimatesCountRes.error) throw estimatesCountRes.error;
-      if (invoicesTotalsRes.error) throw invoicesTotalsRes.error;
-      if (recentEstimatesRes.error) throw recentEstimatesRes.error;
-      if (recentInvoicesRes.error) throw recentInvoicesRes.error;
-      if (recentHoursRes.error) throw recentHoursRes.error;
-      if (recentExpensesRes.error) throw recentExpensesRes.error;
-      if (allExpensesRes.error) throw allExpensesRes.error;
-      if (allHoursRes.error) throw allHoursRes.error;
 
-      const allInvoices = invoicesTotalsRes.data || [];
-      const allExpenses = allExpensesRes.data || [];
-      const allHours = allHoursRes.data || [];
-
-      const totalRevenue = allInvoices.reduce(
-        (sum, inv) => sum + parseFloat(inv.total_amount || 0),
-        0
-      );
-
-      const paidAmount = allInvoices.reduce(
-        (sum, inv) => sum + parseFloat(inv.amount_paid || 0),
-        0
-      );
-
-      const pendingAmount = allInvoices.reduce(
-        (sum, inv) => sum + parseFloat(inv.amount_due || 0),
-        0
-      );
-
-      const totalExpenses = allExpenses.reduce(
-        (sum, exp) => sum + parseFloat(exp.total_amount || 0),
-        0
-      );
-
-      const totalHours = allHours.reduce(
-        (sum, row) => sum + parseFloat(row.total_hours || 0),
-        0
-      );
-
-      const totalProfit = totalRevenue - totalExpenses;
-      const profitPerHour = totalHours > 0 ? totalProfit / totalHours : 0;
-
-      const revenueByEstimate = {};
-      const expenseByEstimate = {};
-      const hoursByEstimate = {};
-
-      allInvoices.forEach((inv) => {
-        if (!inv.estimate_id) return;
-        revenueByEstimate[inv.estimate_id] =
-          (revenueByEstimate[inv.estimate_id] || 0) + Number(inv.total_amount || 0);
-      });
-
-      allExpenses.forEach((exp) => {
-        if (!exp.estimate_id) return;
-        expenseByEstimate[exp.estimate_id] =
-          (expenseByEstimate[exp.estimate_id] || 0) + Number(exp.total_amount || 0);
-      });
-
-      allHours.forEach((row) => {
-        if (!row.estimate_id) return;
-        hoursByEstimate[row.estimate_id] =
-          (hoursByEstimate[row.estimate_id] || 0) + Number(row.total_hours || 0);
-      });
-
-      const estimateNumbers = {};
-      allExpenses.forEach((exp) => {
-        if (exp.estimate_id) {
-          estimateNumbers[exp.estimate_id] = exp.estimate_number || estimateNumbers[exp.estimate_id];
-        }
-      });
-      allHours.forEach((row) => {
-        if (row.estimate_id) {
-          estimateNumbers[row.estimate_id] = row.estimate_number || estimateNumbers[row.estimate_id];
-        }
-      });
-
-      const allEstimateIds = Array.from(
-        new Set([
-          ...Object.keys(revenueByEstimate),
-          ...Object.keys(expenseByEstimate),
-          ...Object.keys(hoursByEstimate)
-        ])
-      );
-
-      const jobMetrics = allEstimateIds
-        .map((estimateId) => {
-          const revenue = revenueByEstimate[estimateId] || 0;
-          const expenses = expenseByEstimate[estimateId] || 0;
-          const hours = hoursByEstimate[estimateId] || 0;
-          const profit = revenue - expenses;
-          const profitPerHourValue = hours > 0 ? profit / hours : 0;
-
-          return {
-            estimate_id: estimateId,
-            estimate_number: estimateNumbers[estimateId] || 'Unknown Estimate',
-            revenue,
-            expenses,
-            hours,
-            profit,
-            profitPerHour: profitPerHourValue
-          };
-        })
-        .sort((a, b) => b.profit - a.profit)
-        .slice(0, 5);
-
-      setStats({
-        totalCustomers: customersRes.count || 0,
-        totalEstimates: estimatesCountRes.count || 0,
-        totalInvoices: invoicesTotalsRes.count || 0,
-        totalRevenue,
-        paidAmount,
-        pendingAmount,
-        totalExpenses,
-        totalHours,
-        totalProfit,
-        profitPerHour,
-        recentEstimates: recentEstimatesRes.data || [],
-        recentInvoices: recentInvoicesRes.data || [],
-        recentHours: recentHoursRes.data || [],
-        recentExpenses: recentExpensesRes.data || [],
-        jobMetrics,
-        allInvoices,
-        allEstimates: recentEstimatesRes.data || [],
-        allHours,
-        allExpenses
-      });
+      setInvoices(invoicesRes.data || []);
+      setCustomers(customersRes.data || []);
     } catch (error) {
-      console.error('Error fetching dashboard data:', error);
+      console.error('Error fetching data:', error);
+      alert('Failed to load invoices');
     } finally {
       setLoading(false);
     }
   };
 
-  const formatCurrency = (amount) => {
-    return `$${parseFloat(amount || 0).toFixed(2)}`;
+  const handleInputChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
+  ) => {
+    const { name, value } = e.target;
+    setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
-  const formatHours = (amount) => {
-    return Number(amount || 0).toFixed(2);
+  const handleLineItemChange = (index: number, field: string, value: string) => {
+    const updated = [...lineItems];
+    updated[index] = { ...updated[index], [field]: value };
+    setLineItems(updated);
   };
 
-  const formatDate = (dateString) => {
-    if (!dateString) return '-';
+  const addLineItem = () => {
+    setLineItems([...lineItems, { description: '', materialCost: '', laborCost: '' }]);
+  };
 
-    return new Date(dateString).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric'
+  const removeLineItem = (index: number) => {
+    if (lineItems.length > 1) {
+      setLineItems(lineItems.filter((_, i) => i !== index));
+    }
+  };
+
+  const calculateLineTotal = (item: { materialCost: string; laborCost: string }) => {
+    return (parseFloat(item.materialCost) || 0) + (parseFloat(item.laborCost) || 0);
+  };
+
+  const calculateGrandTotal = () => {
+    return lineItems.reduce((sum, item) => sum + calculateLineTotal(item), 0);
+  };
+
+  const syncInvoiceToServicesCompleted = async (
+    invoiceId: string,
+    pdfUrl: string | null = null
+  ) => {
+    const { data: invoiceRow, error: invoiceError } = await supabase
+      .from('crm_invoices')
+      .select('*')
+      .eq('id', invoiceId)
+      .single();
+
+    if (invoiceError) throw invoiceError;
+
+    const invoice = invoiceRow as any;
+
+    const { data: paymentRows, error: paymentsError } = await supabase
+      .from('payments')
+      .select('*')
+      .eq('invoice_id', invoice.id)
+      .order('payment_date', { ascending: true });
+
+    if (paymentsError) throw paymentsError;
+
+    const { data: existingRow, error: existingError } = await supabase
+      .from('services_completed')
+      .select('id, payload, pdf_path')
+      .eq('invoice_id', invoice.id)
+      .maybeSingle();
+
+    if (existingError) throw existingError;
+
+    const existingPayload = (existingRow?.payload ?? {}) as any;
+
+    const finalPdfUrl =
+      pdfUrl ||
+      existingPayload?.pdf_url ||
+      existingRow?.pdf_path ||
+      null;
+
+    const payload = {
+      kind: 'invoice',
+      invoice_id: invoice.id,
+      invoice_number: invoice.invoice_number,
+      estimate_id: invoice.estimate_id || null,
+      status: invoice.status,
+      total_amount: Number(invoice.total_amount || 0),
+      amount_paid: Number(invoice.amount_paid || 0),
+      amount_due: Number(invoice.amount_due || 0),
+      approved:
+        typeof existingPayload?.approved === 'boolean'
+          ? existingPayload.approved
+          : null,
+      payments: paymentRows || [],
+      pdf_url: finalPdfUrl
+    };
+
+    const summary = `Invoice ${invoice.invoice_number} ${invoice.status}. Balance due: $${Number(
+      invoice.amount_due || 0
+    ).toFixed(2)}`;
+
+    const mirrorRow = {
+      customer_id: invoice.customer_id,
+      estimate_id: null,
+      invoice_id: invoice.id,
+      service_type: 'invoice',
+      service_date: invoice.invoice_date,
+      technician_name: invoice.tech_name,
+      summary,
+      pdf_path: finalPdfUrl,
+      payload,
+      completed_at: new Date().toISOString()
+    };
+
+    const { data: updatedRows, error: updateError } = await supabase
+      .from('services_completed')
+      .update(mirrorRow)
+      .eq('invoice_id', invoice.id)
+      .select('id');
+
+    if (updateError) throw updateError;
+
+    if (updatedRows && updatedRows.length > 0) return;
+
+    const { error: insertError } = await supabase
+      .from('services_completed')
+      .insert(mirrorRow);
+
+    if (insertError) {
+      if (insertError.code === '23505') {
+        const { error: retryUpdateError } = await supabase
+          .from('services_completed')
+          .update(mirrorRow)
+          .eq('invoice_id', invoice.id);
+
+        if (retryUpdateError) throw retryUpdateError;
+        return;
+      }
+
+      throw insertError;
+    }
+  };
+
+  const generateAndUploadInvoicePdf = async (invoiceId: string, shouldDownload = false) => {
+    const { data: invoice, error: invErr } = await supabase
+      .from('crm_invoices')
+      .select('*, customers(*)')
+      .eq('id', invoiceId)
+      .single();
+
+    if (invErr) throw invErr;
+
+    const { data: items, error: itemsErr } = await supabase
+      .from('crm_invoice_line_items')
+      .select('*')
+      .eq('invoice_id', invoiceId)
+      .order('sort_order');
+
+    if (itemsErr) throw itemsErr;
+
+    const { data: payments, error: paymentsErr } = await supabase
+      .from('payments')
+      .select('*')
+      .eq('invoice_id', invoiceId)
+      .order('payment_date');
+
+    if (paymentsErr) throw paymentsErr;
+
+    const typedInvoice = invoice as InvoiceRow;
+    const typedItems = (items || []) as InvoiceLineItem[];
+    const typedPayments = (payments || []) as PaymentRow[];
+
+    const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+    const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
+
+    const M = 40;
+    const BLUE: [number, number, number] = [30, 80, 160];
+    const LIGHT_GRAY: [number, number, number] = [240, 240, 240];
+
+    const fmtMoney = (n: number | string) => `$${(Number(n) || 0).toFixed(2)}`;
+    const safeText = (val: unknown) => (val ? String(val) : '');
+
+    let logoDataUrl: string | null = null;
+    try {
+      logoDataUrl = await fetchImageAsDataURL(LOGO_URL);
+    } catch (e) {
+      console.warn('Logo not loaded:', e);
+    }
+
+    let y = M;
+
+    if (logoDataUrl) {
+      doc.addImage(logoDataUrl, 'PNG', M, y - 8, 180, 47);
+    } else {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(18);
+      doc.text(COMPANY.name, M, y + 20);
+    }
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    const companyInfoX = M;
+    const companyInfoY = y + 50;
+    doc.text(`Phone: ${COMPANY.phone}`, companyInfoX, companyInfoY);
+    doc.text(`Email: ${COMPANY.email}`, companyInfoX, companyInfoY + 10);
+    doc.text(`Website: ${COMPANY.website}`, companyInfoX, companyInfoY + 20);
+
+    const rightBoxW = 220;
+    const rightBoxX = pageW - M - rightBoxW;
+    const rightBoxY = y;
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(16);
+    doc.text('INVOICE', rightBoxX + rightBoxW / 2, rightBoxY + 18, { align: 'center' });
+
+    doc.setFillColor(...BLUE);
+    doc.rect(rightBoxX, rightBoxY + 26, rightBoxW, 18, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(10);
+    doc.text('INVOICE #', rightBoxX + 10, rightBoxY + 39);
+    doc.text(safeText(typedInvoice.invoice_number), rightBoxX + rightBoxW - 10, rightBoxY + 39, { align: 'right' });
+
+    doc.setTextColor(0, 0, 0);
+    doc.setFillColor(...LIGHT_GRAY);
+    doc.rect(rightBoxX, rightBoxY + 44, rightBoxW, 18, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('DATE', rightBoxX + 10, rightBoxY + 57);
+    doc.setFont('helvetica', 'normal');
+    doc.text(
+      new Date(typedInvoice.invoice_date).toLocaleDateString(),
+      rightBoxX + rightBoxW - 10,
+      rightBoxY + 57,
+      { align: 'right' }
+    );
+
+    doc.setFillColor(...BLUE);
+    doc.rect(rightBoxX, rightBoxY + 62, rightBoxW, 18, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.text('DUE DATE', rightBoxX + 10, rightBoxY + 75);
+    doc.setFont('helvetica', 'normal');
+    doc.text(
+      typedInvoice.due_date ? new Date(typedInvoice.due_date).toLocaleDateString() : '-',
+      rightBoxX + rightBoxW - 10,
+      rightBoxY + 75,
+      { align: 'right' }
+    );
+
+    y = companyInfoY + 35;
+
+    const boxH = 110;
+    const gap = 12;
+    const boxW = (pageW - 2 * M - gap) / 2;
+
+    const billX = M;
+    const jobX = M + boxW + gap;
+    const headerH = 18;
+
+    doc.setDrawColor(180);
+    doc.rect(billX, y, boxW, boxH);
+    doc.setFillColor(...BLUE);
+    doc.rect(billX, y, boxW, headerH, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('BILL TO', billX + 10, y + 13);
+
+    doc.setTextColor(0, 0, 0);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+
+    let by = y + headerH + 16;
+    doc.text(safeText(typedInvoice.customers?.name), billX + 10, by);
+    by += 12;
+
+    const addr = safeText(typedInvoice.customers?.address);
+    if (addr) {
+      const addrLines = doc.splitTextToSize(addr, boxW - 20);
+      addrLines.forEach((line: string) => {
+        doc.text(line, billX + 10, by);
+        by += 12;
+      });
+    }
+
+    const custEmail = safeText(typedInvoice.customers?.email);
+    const custPhone = safeText(typedInvoice.customers?.phone);
+    if (custEmail) doc.text(custEmail, billX + 10, y + boxH - 28);
+    if (custPhone) doc.text(custPhone, billX + 10, y + boxH - 14);
+
+    doc.rect(jobX, y, boxW, boxH);
+    doc.setFillColor(...BLUE);
+    doc.rect(jobX, y, boxW, headerH, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('JOB DETAILS', jobX + 10, y + 13);
+
+    doc.setTextColor(0, 0, 0);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+
+    const tech = safeText(typedInvoice.tech_name);
+    doc.text(`Technician: ${tech || '-'}`, jobX + 10, y + headerH + 18);
+
+    const workDate = typedInvoice.work_completed_date
+      ? new Date(typedInvoice.work_completed_date).toLocaleDateString()
+      : '';
+    doc.text(`Work Completed: ${workDate || '-'}`, jobX + 10, y + headerH + 34);
+
+    doc.setFontSize(8);
+    doc.setTextColor(120, 120, 120);
+    doc.text('[Work completed description]', jobX + 10, y + headerH + 55);
+    doc.setTextColor(0, 0, 0);
+
+    y += boxH + 10;
+
+    const tableX = M;
+    const tableW = pageW - 2 * M;
+
+    const col = {
+      qty: tableX + 10,
+      desc: tableX + 55,
+      material: tableX + tableW - 180,
+      labor: tableX + tableW - 120,
+      total: tableX + tableW - 55
+    };
+
+    doc.setFillColor(...BLUE);
+    doc.rect(tableX, y, tableW, 16, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.text('QTY', col.qty, y + 11);
+    doc.text('DESCRIPTION', col.desc, y + 11);
+    doc.text('MATERIAL', col.material, y + 11, { align: 'right' });
+    doc.text('LABOR', col.labor, y + 11, { align: 'right' });
+    doc.text('TOTAL', col.total, y + 11, { align: 'right' });
+
+    doc.setTextColor(0, 0, 0);
+    y += 22;
+
+    doc.setDrawColor(200);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+
+    const lineHeight = 12;
+
+    const ensureSpace = (needed: number) => {
+      if (y + needed > pageH - 140) {
+        doc.addPage();
+        y = M;
+      }
+    };
+
+    typedItems.forEach((item) => {
+      ensureSpace(50);
+
+      const qty = 1;
+      const material = Number(item.material_cost) || 0;
+      const labor = Number(item.labor_cost) || 0;
+      const total = Number(item.total_cost) || material + labor;
+
+      const descLines = doc.splitTextToSize(
+        safeText(item.description),
+        col.material - 15 - col.desc
+      );
+      const rowH2 = Math.max(descLines.length * lineHeight, lineHeight) + 10;
+
+      doc.rect(tableX, y - 10, tableW, rowH2);
+
+      doc.text(String(qty), col.qty, y);
+
+      descLines.forEach((line: string, i: number) => {
+        doc.text(line, col.desc, y + i * lineHeight);
+      });
+
+      doc.text(fmtMoney(material), col.material, y, { align: 'right' });
+      doc.text(fmtMoney(labor), col.labor, y, { align: 'right' });
+      doc.text(fmtMoney(total), col.total, y, { align: 'right' });
+
+      y += rowH2;
     });
-  };
 
-  const goToPage = (pageName) => {
-    if (typeof setCurrentPage === 'function') {
-      setCurrentPage(pageName);
+    ensureSpace(140);
+
+    const totalsW = 200;
+    const totalsX = tableX + tableW - totalsW;
+    const totalsY = y + 8;
+
+    const totalBoxHeight = 72;
+    doc.setDrawColor(180);
+    doc.rect(totalsX, totalsY, totalsW, totalBoxHeight);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+
+    doc.setFillColor(...BLUE);
+    doc.rect(totalsX, totalsY, totalsW, 18, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.text('TOTAL', totalsX + 10, totalsY + 12);
+    doc.text(fmtMoney(Number(typedInvoice.total_amount) || 0), totalsX + totalsW - 10, totalsY + 12, { align: 'right' });
+
+    doc.setTextColor(0, 0, 0);
+    doc.setFillColor(...LIGHT_GRAY);
+    doc.rect(totalsX, totalsY + 18, totalsW, 18, 'F');
+    doc.text('PAID', totalsX + 10, totalsY + 30);
+    doc.setFont('helvetica', 'normal');
+    doc.text(fmtMoney(Number(typedInvoice.amount_paid) || 0), totalsX + totalsW - 10, totalsY + 30, { align: 'right' });
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFillColor(...BLUE);
+    doc.rect(totalsX, totalsY + 36, totalsW, 18, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.text('BALANCE DUE', totalsX + 10, totalsY + 48);
+    doc.text(fmtMoney(Number(typedInvoice.amount_due) || 0), totalsX + totalsW - 10, totalsY + 48, { align: 'right' });
+
+    doc.setTextColor(0, 0, 0);
+
+    y = totalsY + totalBoxHeight + 12;
+
+    if (typedPayments && typedPayments.length > 0) {
+      ensureSpace(100);
+
+      doc.setFillColor(...BLUE);
+      doc.rect(M, y, tableW, 14, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.text('PAYMENT HISTORY', M + 10, y + 10);
+      doc.setTextColor(0, 0, 0);
+
+      y += 22;
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.text('DATE', M + 10, y);
+      doc.text('AMOUNT', M + 120, y);
+      doc.text('METHOD', M + 200, y);
+      doc.text('REFERENCE', M + 300, y);
+
+      y += 5;
+      doc.setDrawColor(200);
+      doc.line(M, y, pageW - M, y);
+      y += 10;
+
+      doc.setFont('helvetica', 'normal');
+      typedPayments.forEach((payment) => {
+        ensureSpace(25);
+
+        doc.text(new Date(payment.payment_date).toLocaleDateString(), M + 10, y);
+        doc.text(fmtMoney(Number(payment.amount)), M + 120, y);
+        doc.text(safeText(payment.payment_method).toUpperCase(), M + 200, y);
+        doc.text(safeText(payment.reference_number) || '-', M + 300, y);
+
+        y += 13;
+      });
+
+      y += 8;
     }
-  };
 
-  const openMetricView = (view) => {
-    if (view === 'customers') {
-      setSelectedView('customers');
-      setSelectedData([]);
-      return;
-    }
+    ensureSpace(100);
 
-    if (view === 'estimates') {
-      setSelectedView('estimates');
-      setSelectedData(stats.allEstimates);
-      return;
-    }
+    doc.setFillColor(...BLUE);
+    doc.rect(M, y, tableW, 14, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.text('SCOPE OF WORK', M + 10, y + 10);
+    doc.setTextColor(0, 0, 0);
 
-    if (view === 'invoices') {
-      setSelectedView('invoices');
-      setSelectedData(stats.allInvoices);
-      return;
-    }
+    y += 20;
 
-    if (view === 'paid') {
-      setSelectedView('paid');
-      setSelectedData(
-        stats.allInvoices.filter((inv) => Number(inv.amount_paid || 0) > 0)
-      );
-      return;
-    }
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
 
-    if (view === 'pending') {
-      setSelectedView('pending');
-      setSelectedData(
-        stats.allInvoices.filter((inv) => Number(inv.amount_due || 0) > 0)
-      );
-      return;
-    }
+    const scope = safeText(typedInvoice.notes);
+    const scopeLines = doc.splitTextToSize(scope || '—', tableW - 20);
+    const scopeBoxH = Math.max(60, scopeLines.length * 10 + 16);
 
-    if (view === 'revenue') {
-      setSelectedView('revenue');
-      setSelectedData(stats.allInvoices);
-      return;
-    }
+    doc.setDrawColor(180);
+    doc.rect(M, y - 10, tableW, scopeBoxH);
 
-    if (view === 'expenses') {
-      setSelectedView('expenses');
-      setSelectedData(stats.allExpenses);
-      return;
-    }
-
-    if (view === 'hours') {
-      setSelectedView('hours');
-      setSelectedData(stats.allHours);
-      return;
-    }
-
-    if (view === 'profit') {
-      setSelectedView('profit');
-      setSelectedData(stats.jobMetrics);
-      return;
-    }
-
-    if (view === 'profitPerHour') {
-      setSelectedView('profitPerHour');
-      setSelectedData(stats.jobMetrics);
-      return;
-    }
-  };
-
-  const openEstimateDetail = (estimate) => {
-    setSelectedView('estimate_detail');
-    setSelectedData(estimate);
-  };
-
-  const openInvoiceDetail = (invoice) => {
-    setSelectedView('invoice_detail');
-    setSelectedData(invoice);
-  };
-
-  const openExpenseDetail = (expense) => {
-    setSelectedView('expense_detail');
-    setSelectedData(expense);
-  };
-
-  const openJobHourDetail = (row) => {
-    setSelectedView('job_hour_detail');
-    setSelectedData(row);
-  };
-
-  const openJobMetricDetail = (job) => {
-    const relatedInvoices = stats.allInvoices.filter(
-      (inv) => inv.estimate_id === job.estimate_id
-    );
-
-    const relatedExpenses = stats.allExpenses.filter(
-      (exp) => exp.estimate_id === job.estimate_id
-    );
-
-    const relatedHours = stats.allHours.filter(
-      (row) => row.estimate_id === job.estimate_id
-    );
-
-    setSelectedView('job_metric_detail');
-    setSelectedData({
-      ...job,
-      relatedInvoices,
-      relatedExpenses,
-      relatedHours
+    let sy = y + 8;
+    scopeLines.forEach((line: string) => {
+      doc.text(line, M + 10, sy);
+      sy += 10;
     });
+
+    y = y - 10 + scopeBoxH + 15;
+
+    ensureSpace(80);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+
+    doc.text('Please reference this invoice number in all correspondence.', M, y);
+    y += 10;
+    doc.text(`Questions? ${COMPANY.phone} | ${COMPANY.email}`, M, y);
+    y += 24;
+
+    doc.setDrawColor(0);
+    doc.line(M, y, M + 260, y);
+    doc.text('Signature', M, y + 12);
+
+    doc.line(pageW - M - 180, y, pageW - M, y);
+    doc.text('Date', pageW - M - 180, y + 12);
+
+    const fileName = `invoice-${typedInvoice.invoice_number}.pdf`;
+    const pdfBlob = doc.output('blob');
+
+    const { publicUrl } = await uploadPdfToStorage({
+      fileName,
+      pdfBlob
+    });
+
+    await supabase
+      .from('crm_invoices')
+      .update({
+        pdf_url: publicUrl,
+        pdf_path: publicUrl,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', typedInvoice.id);
+
+    await syncInvoiceToServicesCompleted(typedInvoice.id, publicUrl);
+
+    if (shouldDownload) {
+      doc.save(fileName);
+    }
+
+    return publicUrl;
   };
 
-  const closeModal = () => {
-    setSelectedView(null);
-    setSelectedData(null);
+  const sendInvoiceEmail = async (invoiceId: string) => {
+    try {
+      setEmailBusyId(invoiceId);
+
+      const { data: invoiceData, error: invoiceError } = await supabase
+        .from('crm_invoices')
+        .select('*, customers(*)')
+        .eq('id', invoiceId)
+        .single();
+
+      if (invoiceError) throw invoiceError;
+
+      const invoice = invoiceData as InvoiceRow;
+
+      const customerEmail = invoice.customers?.email?.trim();
+      const customerName = invoice.customers?.name?.trim() || 'Customer';
+
+      if (!customerEmail) {
+        alert('This customer does not have an email address.');
+        return;
+      }
+
+      let pdfUrl =
+        invoice.pdf_url ||
+        invoice.pdf_path ||
+        null;
+
+      if (!pdfUrl) {
+        pdfUrl = await generateAndUploadInvoicePdf(invoiceId, false);
+      }
+
+      const { data, error } = await supabase.functions.invoke('send-invoice-email', {
+        body: {
+          to: customerEmail,
+          customerName,
+          invoiceNumber: invoice.invoice_number,
+          invoiceTotal: Number(invoice.total_amount || 0),
+          pdfUrl,
+          companyName: COMPANY.name,
+          companyPhone: COMPANY.phone,
+          companyEmail: COMPANY.email,
+          companyWebsite: COMPANY.website
+        }
+      });
+
+      if (error) throw error;
+      if (!data?.success) {
+        throw new Error(data?.error || 'Failed to send invoice email');
+      }
+
+      if (invoice.status === 'draft') {
+        await supabase
+          .from('crm_invoices')
+          .update({
+            status: 'sent',
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', invoiceId);
+
+        await syncInvoiceToServicesCompleted(invoiceId, pdfUrl);
+      }
+
+      await fetchData();
+      alert('Invoice email sent successfully!');
+    } catch (error: any) {
+      console.error('Error sending invoice email:', error);
+      alert(`Failed to send invoice email: ${error?.message || 'Unknown error'}`);
+    } finally {
+      setEmailBusyId(null);
+    }
   };
 
-  const renderModalTitle = () => {
-    switch (selectedView) {
-      case 'customers':
-        return 'Total Customers';
-      case 'estimates':
-        return 'All Estimates';
-      case 'invoices':
-        return 'All Invoices';
-      case 'paid':
-        return 'Paid Invoice Details';
-      case 'pending':
-        return 'Pending Invoice Details';
-      case 'revenue':
-        return 'Revenue Breakdown';
-      case 'expenses':
-        return 'Expense Breakdown';
-      case 'hours':
-        return 'Hours Breakdown';
-      case 'profit':
-        return 'Profit By Job';
-      case 'profitPerHour':
-        return 'Profit Per Hour By Job';
-      case 'estimate_detail':
-        return 'Estimate Details';
-      case 'invoice_detail':
-        return 'Invoice Details';
-      case 'expense_detail':
-        return 'Expense Details';
-      case 'job_hour_detail':
-        return 'Job Hour Details';
-      case 'job_metric_detail':
-        return 'Job Financial Details';
-      default:
-        return 'Details';
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    try {
+      const totalAmount = calculateGrandTotal();
+
+      const { data: invoice, error: invoiceError } = await supabase
+        .from('crm_invoices')
+        .insert({
+          invoice_number: formData.invoiceNumber,
+          customer_id: formData.customerId,
+          invoice_date: formData.invoiceDate,
+          due_date: formData.dueDate,
+          work_completed_date: formData.workCompletedDate,
+          tech_name: formData.techName,
+          notes: formData.notes,
+          status: formData.status,
+          total_amount: totalAmount,
+          amount_paid: 0,
+          amount_due: totalAmount
+        })
+        .select()
+        .single();
+
+      if (invoiceError) throw invoiceError;
+
+      const lineItemsToInsert = lineItems.map((item, index) => ({
+        invoice_id: invoice.id,
+        description: item.description,
+        material_cost: parseFloat(item.materialCost) || 0,
+        labor_cost: parseFloat(item.laborCost) || 0,
+        total_cost: calculateLineTotal(item),
+        sort_order: index
+      }));
+
+      const { error: lineItemsError } = await supabase
+        .from('crm_invoice_line_items')
+        .insert(lineItemsToInsert);
+
+      if (lineItemsError) throw lineItemsError;
+
+      await syncInvoiceToServicesCompleted(invoice.id, null);
+      await generateAndUploadInvoicePdf(invoice.id, false);
+
+      setShowForm(false);
+      resetForm();
+      await fetchData();
+      alert('Invoice created successfully!');
+    } catch (error: any) {
+      console.error('Error saving invoice:', error);
+      alert(`Failed to create invoice: ${error?.message || 'Unknown error'}`);
     }
   };
 
-  const renderModalContent = () => {
-    if (!selectedView) return null;
+  const handleDelete = async (id: string) => {
+    if (!window.confirm('Are you sure you want to delete this invoice?')) return;
 
-    if (selectedView === 'customers') {
-      return (
-        <div className="detail-stack">
-          <div className="detail-card">
-            <div className="detail-label">Total Customers</div>
-            <div className="detail-value big">{stats.totalCustomers}</div>
-          </div>
-        </div>
-      );
+    try {
+      const { error: mirrorDeleteError } = await supabase
+        .from('services_completed')
+        .delete()
+        .eq('invoice_id', id);
+
+      if (mirrorDeleteError) throw mirrorDeleteError;
+
+      const { error } = await supabase
+        .from('crm_invoices')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+
+      await fetchData();
+    } catch (error) {
+      console.error('Error deleting invoice:', error);
+      alert('Failed to delete invoice');
     }
+  };
 
-    if (
-      selectedView === 'revenue' ||
-      selectedView === 'invoices' ||
-      selectedView === 'paid' ||
-      selectedView === 'pending'
-    ) {
-      if (!selectedData?.length) {
-        return <div className="empty-state-small">No invoice data found</div>;
-      }
+  const handleStatusChange = async (id: string, newStatus: string) => {
+    try {
+      const { error } = await supabase
+        .from('crm_invoices')
+        .update({
+          status: newStatus,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', id);
 
-      return (
-        <div className="detail-list">
-          {selectedData.map((inv) => (
-            <div
-              key={inv.id}
-              className="detail-list-item clickable"
-              onClick={() => openInvoiceDetail(inv)}
-            >
-              <div className="detail-list-main">
-                <div className="detail-list-title">
-                  {inv.invoice_number || 'Unknown Invoice'}
-                </div>
-                <div className="detail-list-subtitle">
-                  {inv.customers?.name || 'Unknown Customer'}
-                </div>
-                <div className="detail-list-subtitle">
-                  Estimate: {inv.estimate_number || 'N/A'} • Created: {formatDate(inv.created_at)}
-                </div>
-              </div>
-              <div className="detail-list-side">
-                <div className="detail-list-amount">
-                  {formatCurrency(inv.total_amount)}
-                </div>
-                <div className="detail-list-subamount">
-                  Paid: {formatCurrency(inv.amount_paid)}
-                </div>
-                <div className="detail-list-subamount">
-                  Due: {formatCurrency(inv.amount_due)}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      );
+      if (error) throw error;
+
+      await syncInvoiceToServicesCompleted(id, null);
+      await fetchData();
+    } catch (error: any) {
+      console.error('Error updating status:', error);
+      alert(`Failed to update status: ${error?.message || 'Unknown error'}`);
     }
+  };
 
-    if (selectedView === 'estimates') {
-      if (!selectedData?.length) {
-        return <div className="empty-state-small">No estimate data found</div>;
-      }
-
-      return (
-        <div className="detail-list">
-          {selectedData.map((estimate) => (
-            <div
-              key={estimate.id}
-              className="detail-list-item clickable"
-              onClick={() => openEstimateDetail(estimate)}
-            >
-              <div className="detail-list-main">
-                <div className="detail-list-title">
-                  {estimate.estimate_number || 'Unknown Estimate'}
-                </div>
-                <div className="detail-list-subtitle">
-                  {estimate.customers?.name || 'Unknown Customer'}
-                </div>
-                <div className="detail-list-subtitle">
-                  Created: {formatDate(estimate.created_at)}
-                </div>
-              </div>
-              <div className="detail-list-side">
-                <div className="detail-list-amount">
-                  {formatCurrency(estimate.total_amount)}
-                </div>
-                <span className={`status-badge status-${estimate.status}`}>
-                  {estimate.status}
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
-      );
+  const downloadPDF = async (invoiceId: string) => {
+    try {
+      setPdfBusyId(invoiceId);
+      await generateAndUploadInvoicePdf(invoiceId, true);
+      await fetchData();
+    } catch (error: any) {
+      console.error('Error generating PDF:', error);
+      alert(`Failed to generate PDF: ${error?.message || 'Unknown error'}`);
+    } finally {
+      setPdfBusyId(null);
     }
+  };
 
-    if (selectedView === 'expenses') {
-      if (!selectedData?.length) {
-        return <div className="empty-state-small">No expense data found</div>;
-      }
-
-      return (
-        <div className="detail-list">
-          {selectedData.map((expense) => (
-            <div
-              key={expense.id}
-              className="detail-list-item clickable"
-              onClick={() => openExpenseDetail(expense)}
-            >
-              <div className="detail-list-main">
-                <div className="detail-list-title">
-                  {expense.estimate_number || 'Unknown Estimate'}
-                </div>
-                <div className="detail-list-subtitle">
-                  {expense.tech_name || 'Unknown Tech'} • {expense.category || 'No Category'}
-                </div>
-                <div className="detail-list-subtitle">
-                  {formatDate(expense.expense_date)} • Added: {formatDate(expense.created_at)}
-                </div>
-              </div>
-              <div className="detail-list-side">
-                <div className="detail-list-amount">
-                  {formatCurrency(expense.total_amount)}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      );
-    }
-
-    if (selectedView === 'hours') {
-      if (!selectedData?.length) {
-        return <div className="empty-state-small">No hours data found</div>;
-      }
-
-      return (
-        <div className="detail-list">
-          {selectedData.map((row) => (
-            <div
-              key={row.id}
-              className="detail-list-item clickable"
-              onClick={() => openJobHourDetail(row)}
-            >
-              <div className="detail-list-main">
-                <div className="detail-list-title">
-                  {row.estimate_number || 'Unknown Estimate'}
-                </div>
-                <div className="detail-list-subtitle">
-                  {row.tech_name || 'Unknown Tech'}
-                </div>
-                <div className="detail-list-subtitle">
-                  Work Date: {formatDate(row.work_date)} • Added: {formatDate(row.created_at)}
-                </div>
-              </div>
-              <div className="detail-list-side">
-                <div className="detail-list-amount">
-                  {formatHours(row.total_hours)} hrs
-                </div>
-                <span className={`status-badge status-${row.status}`}>
-                  {row.status}
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
-      );
-    }
-
-    if (selectedView === 'profit' || selectedView === 'profitPerHour') {
-      if (!selectedData?.length) {
-        return <div className="empty-state-small">No job profit data found</div>;
-      }
-
-      return (
-        <div className="detail-list">
-          {selectedData.map((job) => (
-            <div
-              key={job.estimate_id}
-              className="detail-list-item clickable"
-              onClick={() => openJobMetricDetail(job)}
-            >
-              <div className="detail-list-main">
-                <div className="detail-list-title">
-                  {job.estimate_number}
-                </div>
-                <div className="detail-list-subtitle">
-                  {job.customer_name || 'Unknown Customer'}
-                </div>
-                <div className="detail-list-subtitle">
-                  Revenue: {formatCurrency(job.revenue)} • Expenses: {formatCurrency(job.expenses)}
-                </div>
-              </div>
-              <div className="detail-list-side">
-                <div className="detail-list-amount">
-                  Profit: {formatCurrency(job.profit)}
-                </div>
-                <div className="detail-list-subamount">
-                  {formatHours(job.hours)} hrs
-                </div>
-                <div className="detail-list-subamount">
-                  {formatCurrency(job.profitPerHour)}/hr
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      );
-    }
-
-    if (selectedView === 'estimate_detail' && selectedData) {
-      return (
-        <div className="detail-stack">
-          <div className="detail-card">
-            <div className="detail-row"><strong>Estimate #:</strong> <span>{selectedData.estimate_number || '-'}</span></div>
-            <div className="detail-row"><strong>Customer:</strong> <span>{selectedData.customers?.name || '-'}</span></div>
-            <div className="detail-row"><strong>Status:</strong> <span>{selectedData.status || '-'}</span></div>
-            <div className="detail-row"><strong>Total:</strong> <span>{formatCurrency(selectedData.total_amount)}</span></div>
-            <div className="detail-row"><strong>Created:</strong> <span>{formatDate(selectedData.created_at)}</span></div>
-            <div className="detail-row"><strong>Updated:</strong> <span>{formatDate(selectedData.updated_at)}</span></div>
-            <div className="detail-row"><strong>Description:</strong> <span>{selectedData.description || '-'}</span></div>
-          </div>
-        </div>
-      );
-    }
-
-    if (selectedView === 'invoice_detail' && selectedData) {
-      return (
-        <div className="detail-stack">
-          <div className="detail-card">
-            <div className="detail-row"><strong>Invoice #:</strong> <span>{selectedData.invoice_number || '-'}</span></div>
-            <div className="detail-row"><strong>Estimate #:</strong> <span>{selectedData.estimate_number || '-'}</span></div>
-            <div className="detail-row"><strong>Customer:</strong> <span>{selectedData.customers?.name || '-'}</span></div>
-            <div className="detail-row"><strong>Status:</strong> <span>{selectedData.status || '-'}</span></div>
-            <div className="detail-row"><strong>Total:</strong> <span>{formatCurrency(selectedData.total_amount)}</span></div>
-            <div className="detail-row"><strong>Paid:</strong> <span>{formatCurrency(selectedData.amount_paid)}</span></div>
-            <div className="detail-row"><strong>Due:</strong> <span>{formatCurrency(selectedData.amount_due)}</span></div>
-            <div className="detail-row"><strong>Invoice Date:</strong> <span>{formatDate(selectedData.invoice_date)}</span></div>
-            <div className="detail-row"><strong>Due Date:</strong> <span>{formatDate(selectedData.due_date)}</span></div>
-            <div className="detail-row"><strong>Created:</strong> <span>{formatDate(selectedData.created_at)}</span></div>
-          </div>
-        </div>
-      );
-    }
-
-    if (selectedView === 'expense_detail' && selectedData) {
-      return (
-        <div className="detail-stack">
-          <div className="detail-card">
-            <div className="detail-row"><strong>Estimate #:</strong> <span>{selectedData.estimate_number || '-'}</span></div>
-            <div className="detail-row"><strong>Tech:</strong> <span>{selectedData.tech_name || '-'}</span></div>
-            <div className="detail-row"><strong>Category:</strong> <span>{selectedData.category || '-'}</span></div>
-            <div className="detail-row"><strong>Total Amount:</strong> <span>{formatCurrency(selectedData.total_amount)}</span></div>
-            <div className="detail-row"><strong>Expense Date:</strong> <span>{formatDate(selectedData.expense_date)}</span></div>
-            <div className="detail-row"><strong>Created:</strong> <span>{formatDate(selectedData.created_at)}</span></div>
-            <div className="detail-row"><strong>Description:</strong> <span>{selectedData.description || '-'}</span></div>
-          </div>
-        </div>
-      );
-    }
-
-    if (selectedView === 'job_hour_detail' && selectedData) {
-      return (
-        <div className="detail-stack">
-          <div className="detail-card">
-            <div className="detail-row"><strong>Estimate #:</strong> <span>{selectedData.estimate_number || '-'}</span></div>
-            <div className="detail-row"><strong>Tech:</strong> <span>{selectedData.tech_name || '-'}</span></div>
-            <div className="detail-row"><strong>Work Date:</strong> <span>{formatDate(selectedData.work_date)}</span></div>
-            <div className="detail-row"><strong>Total Hours:</strong> <span>{formatHours(selectedData.total_hours)}</span></div>
-            <div className="detail-row"><strong>Status:</strong> <span>{selectedData.status || '-'}</span></div>
-            <div className="detail-row"><strong>Created:</strong> <span>{formatDate(selectedData.created_at)}</span></div>
-            <div className="detail-row"><strong>Updated:</strong> <span>{formatDate(selectedData.updated_at)}</span></div>
-            <div className="detail-row"><strong>Notes:</strong> <span>{selectedData.notes || '-'}</span></div>
-          </div>
-        </div>
-      );
-    }
-
-    if (selectedView === 'job_metric_detail' && selectedData) {
-      return (
-        <div className="detail-stack">
-          <div className="detail-card">
-            <div className="detail-row"><strong>Estimate #:</strong> <span>{selectedData.estimate_number}</span></div>
-            <div className="detail-row"><strong>Customer:</strong> <span>{selectedData.customer_name || '-'}</span></div>
-            <div className="detail-row"><strong>Revenue:</strong> <span>{formatCurrency(selectedData.revenue)}</span></div>
-            <div className="detail-row"><strong>Expenses:</strong> <span>{formatCurrency(selectedData.expenses)}</span></div>
-            <div className="detail-row"><strong>Profit:</strong> <span>{formatCurrency(selectedData.profit)}</span></div>
-            <div className="detail-row"><strong>Total Hours:</strong> <span>{formatHours(selectedData.hours)}</span></div>
-            <div className="detail-row"><strong>Profit/Hour:</strong> <span>{formatCurrency(selectedData.profitPerHour)}</span></div>
-          </div>
-
-          <div className="detail-card">
-            <h4>Related Invoices</h4>
-            {selectedData.relatedInvoices?.length ? (
-              selectedData.relatedInvoices.map((inv) => (
-                <div key={inv.id} className="detail-row">
-                  <span>{inv.invoice_number || 'Unknown Invoice'}</span>
-                  <span>{formatCurrency(inv.total_amount)}</span>
-                </div>
-              ))
-            ) : (
-              <div className="empty-state-small">No invoices found</div>
-            )}
-          </div>
-
-          <div className="detail-card">
-            <h4>Related Expenses</h4>
-            {selectedData.relatedExpenses?.length ? (
-              selectedData.relatedExpenses.map((exp) => (
-                <div key={exp.id} className="detail-row">
-                  <span>
-                    {exp.category || 'No Category'} • {exp.tech_name || 'Unknown Tech'}
-                  </span>
-                  <span>{formatCurrency(exp.total_amount)}</span>
-                </div>
-              ))
-            ) : (
-              <div className="empty-state-small">No expenses found</div>
-            )}
-          </div>
-
-          <div className="detail-card">
-            <h4>Related Hours</h4>
-            {selectedData.relatedHours?.length ? (
-              selectedData.relatedHours.map((row) => (
-                <div key={row.id} className="detail-row">
-                  <span>
-                    {row.tech_name || 'Unknown Tech'} • {formatDate(row.work_date)}
-                  </span>
-                  <span>{formatHours(row.total_hours)} hrs</span>
-                </div>
-              ))
-            ) : (
-              <div className="empty-state-small">No hours found</div>
-            )}
-          </div>
-        </div>
-      );
-    }
-
-    return <div className="empty-state-small">No details available</div>;
+  const resetForm = () => {
+    setFormData({
+      invoiceNumber: '',
+      customerId: '',
+      invoiceDate: new Date().toISOString().split('T')[0],
+      dueDate: '',
+      workCompletedDate: '',
+      techName: '',
+      notes: '',
+      status: 'draft'
+    });
+    setLineItems([{ description: '', materialCost: '', laborCost: '' }]);
   };
 
   if (loading) {
-    return <div className="loading">Loading dashboard...</div>;
+    return <div className="loading">Loading invoices...</div>;
   }
 
   return (
-    <div className="dashboard">
-      <h2 className="dashboard-title">Dashboard</h2>
-
-      <div className="stats-grid">
-        <div className="stat-card clickable" onClick={() => goToPage('customers')}>
-          <div className="stat-icon" style={{ backgroundColor: '#d4edff' }}>
-            <span style={{ color: '#2980b9' }}>👥</span>
-          </div>
-          <div className="stat-content">
-            <div className="stat-value">{stats.totalCustomers}</div>
-            <div className="stat-label">Total Customers</div>
-          </div>
-        </div>
-
-        <div className="stat-card clickable" onClick={() => goToPage('estimates')}>
-          <div className="stat-icon" style={{ backgroundColor: '#fff3cd' }}>
-            <span style={{ color: '#f39c12' }}>📄</span>
-          </div>
-          <div className="stat-content">
-            <div className="stat-value">{stats.totalEstimates}</div>
-            <div className="stat-label">Total Estimates</div>
-          </div>
-        </div>
-
-        <div className="stat-card clickable" onClick={() => goToPage('invoices')}>
-          <div className="stat-icon" style={{ backgroundColor: '#d5f4e6' }}>
-            <span style={{ color: '#27ae60' }}>📋</span>
-          </div>
-          <div className="stat-content">
-            <div className="stat-value">{stats.totalInvoices}</div>
-            <div className="stat-label">Total Invoices</div>
-          </div>
-        </div>
-
-        <div className="stat-card clickable" onClick={() => goToPage('payments')}>
-          <div className="stat-icon" style={{ backgroundColor: '#d5f4e6' }}>
-            <span style={{ color: '#27ae60' }}>💰</span>
-          </div>
-          <div className="stat-content">
-            <div className="stat-value">{formatCurrency(stats.paidAmount)}</div>
-            <div className="stat-label">Amount Paid</div>
-          </div>
-        </div>
-
-        <div className="stat-card clickable" onClick={() => goToPage('payments')}>
-          <div className="stat-icon" style={{ backgroundColor: '#fadbd8' }}>
-            <span style={{ color: '#e74c3c' }}>⏳</span>
-          </div>
-          <div className="stat-content">
-            <div className="stat-value">{formatCurrency(stats.pendingAmount)}</div>
-            <div className="stat-label">Amount Pending</div>
-          </div>
-        </div>
-
-        <div className="stat-card clickable" onClick={() => openMetricView('revenue')}>
-          <div className="stat-icon" style={{ backgroundColor: '#d4edff' }}>
-            <span style={{ color: '#2980b9' }}>📊</span>
-          </div>
-          <div className="stat-content">
-            <div className="stat-value">{formatCurrency(stats.totalRevenue)}</div>
-            <div className="stat-label">Total Revenue</div>
-          </div>
-        </div>
-
-        <div className="stat-card clickable" onClick={() => goToPage('expenses')}>
-          <div className="stat-icon" style={{ backgroundColor: '#fdebd0' }}>
-            <span style={{ color: '#d35400' }}>🧾</span>
-          </div>
-          <div className="stat-content">
-            <div className="stat-value">{formatCurrency(stats.totalExpenses)}</div>
-            <div className="stat-label">Total Expenses</div>
-          </div>
-        </div>
-
-        <div className="stat-card clickable" onClick={() => goToPage('hours')}>
-          <div className="stat-icon" style={{ backgroundColor: '#ebf5fb' }}>
-            <span style={{ color: '#2471a3' }}>⏱️</span>
-          </div>
-          <div className="stat-content">
-            <div className="stat-value">{formatHours(stats.totalHours)}</div>
-            <div className="stat-label">Total Hours</div>
-          </div>
-        </div>
-
-        <div className="stat-card clickable" onClick={() => goToPage('expenses')}>
-          <div className="stat-icon" style={{ backgroundColor: '#e8f8f5' }}>
-            <span style={{ color: '#148f77' }}>📈</span>
-          </div>
-          <div className="stat-content">
-            <div className="stat-value">{formatCurrency(stats.totalProfit)}</div>
-            <div className="stat-label">Profit After Expenses</div>
-          </div>
-        </div>
-
-        <div className="stat-card clickable" onClick={() => goToPage('hours')}>
-          <div className="stat-icon" style={{ backgroundColor: '#f5eef8' }}>
-            <span style={{ color: '#7d3c98' }}>⚙️</span>
-          </div>
-          <div className="stat-content">
-            <div className="stat-value">{formatCurrency(stats.profitPerHour)}</div>
-            <div className="stat-label">Profit Per Hour</div>
-          </div>
-        </div>
+    <div className="page-container">
+      <div className="page-header">
+        <h2>Invoices</h2>
+        {!showForm && (
+          <button className="btn-primary" onClick={() => setShowForm(true)}>
+            + Create Invoice
+          </button>
+        )}
       </div>
 
-      <div className="dashboard-grid">
-        <div className="dashboard-section">
-          <h3>Recent Estimates</h3>
-          {stats.recentEstimates.length === 0 ? (
-            <div className="empty-state-small">No estimates yet</div>
-          ) : (
-            <div className="list-items">
-              {stats.recentEstimates.map((estimate) => (
-                <div
-                  key={estimate.id}
-                  className="list-item clickable"
-                  onClick={() => openEstimateDetail(estimate)}
+      {showForm && (
+        <div className="form-card">
+          <h3>New Invoice</h3>
+          <form onSubmit={handleSubmit}>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Invoice Number *</label>
+                <input
+                  type="text"
+                  name="invoiceNumber"
+                  value={formData.invoiceNumber}
+                  onChange={handleInputChange}
+                  required
+                  readOnly
+                  style={{ backgroundColor: '#ecf0f1', cursor: 'not-allowed' }}
+                />
+              </div>
+              <div className="form-group">
+                <label>Customer *</label>
+                <select
+                  name="customerId"
+                  value={formData.customerId}
+                  onChange={handleInputChange}
+                  required
                 >
-                  <div className="list-item-main">
-                    <div className="list-item-title">
-                      {estimate.estimate_number}
-                    </div>
-                    <div className="list-item-subtitle">
-                      {estimate.customers?.name || 'Unknown Customer'}
-                    </div>
+                  <option value="">Select Customer</option>
+                  {customers.map((customer) => (
+                    <option key={customer.id} value={customer.id}>
+                      {customer.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Technician Name *</label>
+                <input
+                  type="text"
+                  name="techName"
+                  value={formData.techName}
+                  onChange={handleInputChange}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="form-row">
+              <div className="form-group">
+                <label>Invoice Date *</label>
+                <input
+                  type="date"
+                  name="invoiceDate"
+                  value={formData.invoiceDate}
+                  onChange={handleInputChange}
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label>Due Date *</label>
+                <input
+                  type="date"
+                  name="dueDate"
+                  value={formData.dueDate}
+                  onChange={handleInputChange}
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label>Work Completed Date *</label>
+                <input
+                  type="date"
+                  name="workCompletedDate"
+                  value={formData.workCompletedDate}
+                  onChange={handleInputChange}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label>Status *</label>
+              <select
+                name="status"
+                value={formData.status}
+                onChange={handleInputChange}
+                required
+              >
+                <option value="draft">Draft</option>
+                <option value="sent">Sent</option>
+                <option value="partial">Partial</option>
+                <option value="paid">Paid</option>
+                <option value="overdue">Overdue</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+            </div>
+
+            <div className="form-section" style={{ marginTop: '24px' }}>
+              <h4 style={{ marginBottom: '16px' }}>Line Items</h4>
+              {lineItems.map((item, index) => (
+                <div
+                  key={index}
+                  style={{
+                    backgroundColor: '#fff',
+                    border: '1px solid #e5e5e5',
+                    borderRadius: '6px',
+                    padding: '16px',
+                    marginBottom: '12px'
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
+                    <strong>Item {index + 1}</strong>
+                    {lineItems.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeLineItem(index)}
+                        className="btn-small btn-delete"
+                      >
+                        Remove
+                      </button>
+                    )}
                   </div>
-                  <div className="list-item-side">
-                    <div className="list-item-amount">
-                      {formatCurrency(estimate.total_amount)}
+
+                  <div className="form-group">
+                    <label>Description *</label>
+                    <textarea
+                      value={item.description}
+                      onChange={(e) => handleLineItemChange(index, 'description', e.target.value)}
+                      rows={2}
+                      required
+                    />
+                  </div>
+
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label>Material Cost</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={item.materialCost}
+                        onChange={(e) => handleLineItemChange(index, 'materialCost', e.target.value)}
+                        placeholder="0.00"
+                      />
                     </div>
-                    <span className={`status-badge status-${estimate.status}`}>
-                      {estimate.status}
-                    </span>
+
+                    <div className="form-group">
+                      <label>Labor Cost</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={item.laborCost}
+                        onChange={(e) => handleLineItemChange(index, 'laborCost', e.target.value)}
+                        placeholder="0.00"
+                      />
+                    </div>
+
+                    <div className="form-group">
+                      <label>Total</label>
+                      <div
+                        style={{
+                          padding: '10px 12px',
+                          backgroundColor: '#ecf0f1',
+                          borderRadius: '4px',
+                          fontWeight: '600'
+                        }}
+                      >
+                        ${calculateLineTotal(item).toFixed(2)}
+                      </div>
+                    </div>
                   </div>
                 </div>
               ))}
-            </div>
-          )}
-        </div>
 
-        <div className="dashboard-section">
-          <h3>Recent Invoices</h3>
-          {stats.recentInvoices.length === 0 ? (
-            <div className="empty-state-small">No invoices yet</div>
-          ) : (
-            <div className="list-items">
-              {stats.recentInvoices.map((invoice) => (
-                <div
-                  key={invoice.id}
-                  className="list-item clickable"
-                  onClick={() => openInvoiceDetail(invoice)}
-                >
-                  <div className="list-item-main">
-                    <div className="list-item-title">
-                      {invoice.invoice_number}
-                    </div>
-                    <div className="list-item-subtitle">
-                      {invoice.customers?.name || 'Unknown Customer'}
-                    </div>
-                  </div>
-                  <div className="list-item-side">
-                    <div className="list-item-amount">
-                      {formatCurrency(invoice.total_amount)}
-                    </div>
-                    <span className={`status-badge status-${invoice.status}`}>
-                      {invoice.status}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div className="dashboard-section">
-          <h3>Recent Job Hours</h3>
-          {stats.recentHours.length === 0 ? (
-            <div className="empty-state-small">No hour entries yet</div>
-          ) : (
-            <div className="list-items">
-              {stats.recentHours.map((row) => (
-                <div
-                  key={row.id}
-                  className="list-item clickable"
-                  onClick={() => openJobHourDetail(row)}
-                >
-                  <div className="list-item-main">
-                    <div className="list-item-title">
-                      {row.estimate_number || 'Unknown Estimate'}
-                    </div>
-                    <div className="list-item-subtitle">
-                      {row.tech_name || 'Unknown Tech'}
-                    </div>
-                    <div className="list-item-subtitle">
-                      {formatDate(row.work_date)} • {formatHours(row.total_hours)} hrs
-                    </div>
-                  </div>
-                  <div className="list-item-side">
-                    <span className={`status-badge status-${row.status}`}>
-                      {row.status}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div className="dashboard-section">
-          <h3>Recent Expenses</h3>
-          {stats.recentExpenses.length === 0 ? (
-            <div className="empty-state-small">No expenses yet</div>
-          ) : (
-            <div className="list-items">
-              {stats.recentExpenses.map((expense) => (
-                <div
-                  key={expense.id}
-                  className="list-item clickable"
-                  onClick={() => openExpenseDetail(expense)}
-                >
-                  <div className="list-item-main">
-                    <div className="list-item-title">
-                      {expense.estimate_number || 'Unknown Estimate'}
-                    </div>
-                    <div className="list-item-subtitle">
-                      {expense.tech_name || 'Unknown Tech'} • {expense.category}
-                    </div>
-                    <div className="list-item-subtitle">
-                      {formatDate(expense.expense_date)}
-                    </div>
-                  </div>
-                  <div className="list-item-side">
-                    <div className="list-item-amount">
-                      {formatCurrency(expense.total_amount)}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div className="dashboard-section">
-          <h3>Top Job Profit Metrics</h3>
-          {stats.jobMetrics.length === 0 ? (
-            <div className="empty-state-small">No job metrics yet</div>
-          ) : (
-            <div className="list-items">
-              {stats.jobMetrics.map((job) => (
-                <div
-                  key={job.estimate_id}
-                  className="list-item clickable"
-                  onClick={() => openJobMetricDetail(job)}
-                >
-                  <div className="list-item-main">
-                    <div className="list-item-title">
-                      {job.estimate_number}
-                    </div>
-                    <div className="list-item-subtitle">
-                      {job.customer_name || 'Unknown Customer'}
-                    </div>
-                    <div className="list-item-subtitle">
-                      Revenue: {formatCurrency(job.revenue)} • Expenses: {formatCurrency(job.expenses)}
-                    </div>
-                    <div className="list-item-subtitle">
-                      Hours: {formatHours(job.hours)} • Profit/Hour: {formatCurrency(job.profitPerHour)}
-                    </div>
-                  </div>
-                  <div className="list-item-side">
-                    <div className="list-item-amount">
-                      {formatCurrency(job.profit)}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {selectedView && (
-        <div className="modal-overlay" onClick={closeModal}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>{renderModalTitle()}</h3>
-              <button className="modal-close" onClick={closeModal}>
-                ×
+              <button type="button" onClick={addLineItem} className="btn-primary" style={{ width: '100%' }}>
+                + Add Line Item
               </button>
             </div>
 
-            <div className="modal-body">
-              {renderModalContent()}
+            <div className="form-group" style={{ marginTop: '24px' }}>
+              <label>Notes</label>
+              <textarea
+                name="notes"
+                value={formData.notes}
+                onChange={handleInputChange}
+                rows={3}
+                placeholder="Additional notes or terms..."
+              />
             </div>
-          </div>
+
+            <div
+              style={{
+                marginTop: '24px',
+                padding: '16px',
+                backgroundColor: '#f8f9fa',
+                borderRadius: '6px',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}
+            >
+              <strong style={{ fontSize: '18px' }}>Grand Total:</strong>
+              <span style={{ fontSize: '24px', fontWeight: '700', color: '#27ae60' }}>
+                ${calculateGrandTotal().toFixed(2)}
+              </span>
+            </div>
+
+            <div className="form-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setShowForm(false);
+                  resetForm();
+                }}
+              >
+                Cancel
+              </button>
+              <button type="submit" className="btn-primary">
+                Create Invoice
+              </button>
+            </div>
+          </form>
         </div>
       )}
+
+      <div className="table-container">
+        {invoices.length === 0 ? (
+          <div className="empty-state">
+            <p>No invoices yet. Create your first invoice to get started!</p>
+          </div>
+        ) : (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Invoice #</th>
+                <th>Customer</th>
+                <th>Date</th>
+                <th>Due Date</th>
+                <th>Total</th>
+                <th>Paid</th>
+                <th>Balance</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {invoices.map((invoice) => (
+                <tr key={invoice.id}>
+                  <td><strong>{invoice.invoice_number}</strong></td>
+                  <td>{invoice.customers?.name || 'Unknown'}</td>
+                  <td>{new Date(invoice.invoice_date).toLocaleDateString()}</td>
+                  <td>{invoice.due_date ? new Date(invoice.due_date).toLocaleDateString() : '-'}</td>
+                  <td><strong>${parseFloat(invoice.total_amount).toFixed(2)}</strong></td>
+                  <td style={{ color: '#27ae60' }}>${parseFloat(invoice.amount_paid).toFixed(2)}</td>
+                  <td style={{ color: '#e74c3c' }}>${parseFloat(invoice.amount_due).toFixed(2)}</td>
+                  <td>
+                    <select
+                      value={invoice.status}
+                      onChange={(e) => handleStatusChange(invoice.id, e.target.value)}
+                      className={`status-badge status-${invoice.status}`}
+                      style={{ border: 'none', cursor: 'pointer' }}
+                    >
+                      <option value="draft">Draft</option>
+                      <option value="sent">Sent</option>
+                      <option value="partial">Partial</option>
+                      <option value="paid">Paid</option>
+                      <option value="overdue">Overdue</option>
+                      <option value="cancelled">Cancelled</option>
+                    </select>
+                  </td>
+                  <td>
+                    <div className="action-buttons">
+                      <button
+                        className="btn-small btn-view"
+                        onClick={() => downloadPDF(invoice.id)}
+                        disabled={pdfBusyId === invoice.id}
+                      >
+                        {pdfBusyId === invoice.id ? 'Working...' : 'PDF'}
+                      </button>
+
+                      <button
+                        className="btn-small btn-primary"
+                        onClick={() => sendInvoiceEmail(invoice.id)}
+                        disabled={emailBusyId === invoice.id}
+                      >
+                        {emailBusyId === invoice.id ? 'Sending...' : 'Send Email'}
+                      </button>
+
+                      <button
+                        className="btn-small btn-delete"
+                        onClick={() => handleDelete(invoice.id)}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 }
 
-export default Dashboard;
+export default Invoices;
