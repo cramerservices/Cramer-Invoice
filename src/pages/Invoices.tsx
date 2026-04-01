@@ -11,7 +11,7 @@ const COMPANY = {
 };
 
 const LOGO_URL = `${import.meta.env.BASE_URL}CramerLogoText.png`;
-const PDF_BUCKET = 'service-docs'; 
+const PDF_BUCKET = 'service-docs';
 
 async function fetchImageAsDataURL(url: string) {
   const res = await fetch(url, { cache: 'no-store' });
@@ -68,6 +68,8 @@ type InvoiceRow = {
   total_amount: number | string;
   amount_paid: number | string;
   amount_due: number | string;
+  pdf_url?: string | null;
+  pdf_path?: string | null;
   customers?: {
     name?: string | null;
     address?: string | null;
@@ -98,6 +100,8 @@ function Invoices() {
   const [showForm, setShowForm] = useState(false);
   const [loading, setLoading] = useState(true);
   const [pdfBusyId, setPdfBusyId] = useState<string | null>(null);
+  const [emailBusyId, setEmailBusyId] = useState<string | null>(null);
+
   const [formData, setFormData] = useState({
     invoiceNumber: '',
     customerId: '',
@@ -108,6 +112,7 @@ function Invoices() {
     notes: '',
     status: 'draft'
   });
+
   const [lineItems, setLineItems] = useState([
     { description: '', materialCost: '', laborCost: '' }
   ]);
@@ -155,7 +160,7 @@ function Invoices() {
       const [invoicesRes, customersRes] = await Promise.all([
         supabase
           .from('crm_invoices')
-          .select('*, customers(name)')
+          .select('*, customers(*)')
           .order('created_at', { ascending: false }),
         supabase
           .from('customers')
@@ -207,106 +212,107 @@ function Invoices() {
     return lineItems.reduce((sum, item) => sum + calculateLineTotal(item), 0);
   };
 
-const syncInvoiceToServicesCompleted = async (
-  invoiceId: string,
-  pdfUrl: string | null = null
-) => {
-  const { data: invoiceRow, error: invoiceError } = await supabase
-    .from('crm_invoices')
-    .select('*')
-    .eq('id', invoiceId)
-    .single();
+  const syncInvoiceToServicesCompleted = async (
+    invoiceId: string,
+    pdfUrl: string | null = null
+  ) => {
+    const { data: invoiceRow, error: invoiceError } = await supabase
+      .from('crm_invoices')
+      .select('*')
+      .eq('id', invoiceId)
+      .single();
 
-  if (invoiceError) throw invoiceError;
+    if (invoiceError) throw invoiceError;
 
-  const invoice = invoiceRow as any;
+    const invoice = invoiceRow as any;
 
-  const { data: paymentRows, error: paymentsError } = await supabase
-    .from('payments')
-    .select('*')
-    .eq('invoice_id', invoice.id)
-    .order('payment_date', { ascending: true });
+    const { data: paymentRows, error: paymentsError } = await supabase
+      .from('payments')
+      .select('*')
+      .eq('invoice_id', invoice.id)
+      .order('payment_date', { ascending: true });
 
-  if (paymentsError) throw paymentsError;
+    if (paymentsError) throw paymentsError;
 
-  const { data: existingRow, error: existingError } = await supabase
-    .from('services_completed')
-    .select('id, payload, pdf_path')
-    .eq('invoice_id', invoice.id)
-    .maybeSingle();
+    const { data: existingRow, error: existingError } = await supabase
+      .from('services_completed')
+      .select('id, payload, pdf_path')
+      .eq('invoice_id', invoice.id)
+      .maybeSingle();
 
-  if (existingError) throw existingError;
+    if (existingError) throw existingError;
 
-  const existingPayload = (existingRow?.payload ?? {}) as any;
+    const existingPayload = (existingRow?.payload ?? {}) as any;
 
-  const finalPdfUrl =
-    pdfUrl ||
-    existingPayload?.pdf_url ||
-    existingRow?.pdf_path ||
-    null;
+    const finalPdfUrl =
+      pdfUrl ||
+      existingPayload?.pdf_url ||
+      existingRow?.pdf_path ||
+      null;
 
-  const payload = {
-    kind: 'invoice',
-    invoice_id: invoice.id,
-    invoice_number: invoice.invoice_number,
-    estimate_id: invoice.estimate_id || null,
-    status: invoice.status,
-    total_amount: Number(invoice.total_amount || 0),
-    amount_paid: Number(invoice.amount_paid || 0),
-    amount_due: Number(invoice.amount_due || 0),
-    approved:
-      typeof existingPayload?.approved === 'boolean'
-        ? existingPayload.approved
-        : null,
-    payments: paymentRows || [],
-    pdf_url: finalPdfUrl
-  };
+    const payload = {
+      kind: 'invoice',
+      invoice_id: invoice.id,
+      invoice_number: invoice.invoice_number,
+      estimate_id: invoice.estimate_id || null,
+      status: invoice.status,
+      total_amount: Number(invoice.total_amount || 0),
+      amount_paid: Number(invoice.amount_paid || 0),
+      amount_due: Number(invoice.amount_due || 0),
+      approved:
+        typeof existingPayload?.approved === 'boolean'
+          ? existingPayload.approved
+          : null,
+      payments: paymentRows || [],
+      pdf_url: finalPdfUrl
+    };
 
-  const summary = `Invoice ${invoice.invoice_number} ${invoice.status}. Balance due: $${Number(
-    invoice.amount_due || 0
-  ).toFixed(2)}`;
+    const summary = `Invoice ${invoice.invoice_number} ${invoice.status}. Balance due: $${Number(
+      invoice.amount_due || 0
+    ).toFixed(2)}`;
 
-  const mirrorRow = {
-    customer_id: invoice.customer_id,
-    estimate_id: null, // IMPORTANT
-    invoice_id: invoice.id,
-    service_type: 'invoice',
-    service_date: invoice.invoice_date,
-    technician_name: invoice.tech_name,
-    summary,
-    pdf_path: finalPdfUrl,
-    payload,
-    completed_at: new Date().toISOString()
-  };
+    const mirrorRow = {
+      customer_id: invoice.customer_id,
+      estimate_id: null,
+      invoice_id: invoice.id,
+      service_type: 'invoice',
+      service_date: invoice.invoice_date,
+      technician_name: invoice.tech_name,
+      summary,
+      pdf_path: finalPdfUrl,
+      payload,
+      completed_at: new Date().toISOString()
+    };
 
-  const { data: updatedRows, error: updateError } = await supabase
-    .from('services_completed')
-    .update(mirrorRow)
-    .eq('invoice_id', invoice.id)
-    .select('id');
+    const { data: updatedRows, error: updateError } = await supabase
+      .from('services_completed')
+      .update(mirrorRow)
+      .eq('invoice_id', invoice.id)
+      .select('id');
 
-  if (updateError) throw updateError;
+    if (updateError) throw updateError;
 
-  if (updatedRows && updatedRows.length > 0) return;
+    if (updatedRows && updatedRows.length > 0) return;
 
-  const { error: insertError } = await supabase
-    .from('services_completed')
-    .insert(mirrorRow);
+    const { error: insertError } = await supabase
+      .from('services_completed')
+      .insert(mirrorRow);
 
-  if (insertError) {
-    if (insertError.code === '23505') {
-      const { error: retryUpdateError } = await supabase
-        .from('services_completed')
-        .update(mirrorRow)
-        .eq('invoice_id', invoice.id);
+    if (insertError) {
+      if (insertError.code === '23505') {
+        const { error: retryUpdateError } = await supabase
+          .from('services_completed')
+          .update(mirrorRow)
+          .eq('invoice_id', invoice.id);
 
-      if (retryUpdateError) throw retryUpdateError;
-      return;
+        if (retryUpdateError) throw retryUpdateError;
+        return;
+      }
+
+      throw insertError;
     }
+  };
 
-    throw insertError;
-  }
-};
   const generateAndUploadInvoicePdf = async (invoiceId: string, shouldDownload = false) => {
     const { data: invoice, error: invErr } = await supabase
       .from('crm_invoices')
@@ -681,6 +687,15 @@ const syncInvoiceToServicesCompleted = async (
       pdfBlob
     });
 
+    await supabase
+      .from('crm_invoices')
+      .update({
+        pdf_url: publicUrl,
+        pdf_path: publicUrl,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', typedInvoice.id);
+
     await syncInvoiceToServicesCompleted(typedInvoice.id, publicUrl);
 
     if (shouldDownload) {
@@ -688,6 +703,78 @@ const syncInvoiceToServicesCompleted = async (
     }
 
     return publicUrl;
+  };
+
+  const sendInvoiceEmail = async (invoiceId: string) => {
+    try {
+      setEmailBusyId(invoiceId);
+
+      const { data: invoiceData, error: invoiceError } = await supabase
+        .from('crm_invoices')
+        .select('*, customers(*)')
+        .eq('id', invoiceId)
+        .single();
+
+      if (invoiceError) throw invoiceError;
+
+      const invoice = invoiceData as InvoiceRow;
+
+      const customerEmail = invoice.customers?.email?.trim();
+      const customerName = invoice.customers?.name?.trim() || 'Customer';
+
+      if (!customerEmail) {
+        alert('This customer does not have an email address.');
+        return;
+      }
+
+      let pdfUrl =
+        invoice.pdf_url ||
+        invoice.pdf_path ||
+        null;
+
+      if (!pdfUrl) {
+        pdfUrl = await generateAndUploadInvoicePdf(invoiceId, false);
+      }
+
+      const { data, error } = await supabase.functions.invoke('send-invoice-email', {
+        body: {
+          to: customerEmail,
+          customerName,
+          invoiceNumber: invoice.invoice_number,
+          invoiceTotal: Number(invoice.total_amount || 0),
+          pdfUrl,
+          companyName: COMPANY.name,
+          companyPhone: COMPANY.phone,
+          companyEmail: COMPANY.email,
+          companyWebsite: COMPANY.website
+        }
+      });
+
+      if (error) throw error;
+      if (!data?.success) {
+        throw new Error(data?.error || 'Failed to send invoice email');
+      }
+
+      if (invoice.status === 'draft') {
+        await supabase
+          .from('crm_invoices')
+          .update({
+            status: 'sent',
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', invoiceId);
+
+        await syncInvoiceToServicesCompleted(invoiceId, pdfUrl);
+      }
+
+      await fetchData();
+      alert('Invoice email sent successfully!');
+    } catch (error: any) {
+      console.error('Error sending invoice email:', error);
+      alert(`Failed to send invoice email: ${error?.message || 'Unknown error'}`);
+    } finally {
+      setEmailBusyId(null);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -744,32 +831,33 @@ const syncInvoiceToServicesCompleted = async (
     }
   };
 
-const handleDelete = async (id: string) => {
-  if (!window.confirm('Are you sure you want to delete this invoice?')) return;
+  const handleDelete = async (id: string) => {
+    if (!window.confirm('Are you sure you want to delete this invoice?')) return;
 
-  try {
-    const { error: mirrorDeleteError } = await supabase
-      .from('services_completed')
-      .delete()
-      .eq('invoice_id', id);
+    try {
+      const { error: mirrorDeleteError } = await supabase
+        .from('services_completed')
+        .delete()
+        .eq('invoice_id', id);
 
-    if (mirrorDeleteError) throw mirrorDeleteError;
+      if (mirrorDeleteError) throw mirrorDeleteError;
 
-    const { error } = await supabase
-      .from('crm_invoices')
-      .delete()
-      .eq('id', id);
+      const { error } = await supabase
+        .from('crm_invoices')
+        .delete()
+        .eq('id', id);
 
-    if (error) throw error;
+      if (error) throw error;
 
-    await fetchData();
-  } catch (error) {
-    console.error('Error deleting invoice:', error);
-    alert('Failed to delete invoice');
-  }
-};
+      await fetchData();
+    } catch (error) {
+      console.error('Error deleting invoice:', error);
+      alert('Failed to delete invoice');
+    }
+  };
+
   const handleStatusChange = async (id: string, newStatus: string) => {
-    try { 
+    try {
       const { error } = await supabase
         .from('crm_invoices')
         .update({
@@ -1081,7 +1169,7 @@ const handleDelete = async (id: string) => {
                   <td><strong>{invoice.invoice_number}</strong></td>
                   <td>{invoice.customers?.name || 'Unknown'}</td>
                   <td>{new Date(invoice.invoice_date).toLocaleDateString()}</td>
-                  <td>{new Date(invoice.due_date).toLocaleDateString()}</td>
+                  <td>{invoice.due_date ? new Date(invoice.due_date).toLocaleDateString() : '-'}</td>
                   <td><strong>${parseFloat(invoice.total_amount).toFixed(2)}</strong></td>
                   <td style={{ color: '#27ae60' }}>${parseFloat(invoice.amount_paid).toFixed(2)}</td>
                   <td style={{ color: '#e74c3c' }}>${parseFloat(invoice.amount_due).toFixed(2)}</td>
@@ -1109,6 +1197,15 @@ const handleDelete = async (id: string) => {
                       >
                         {pdfBusyId === invoice.id ? 'Working...' : 'PDF'}
                       </button>
+
+                      <button
+                        className="btn-small btn-primary"
+                        onClick={() => sendInvoiceEmail(invoice.id)}
+                        disabled={emailBusyId === invoice.id}
+                      >
+                        {emailBusyId === invoice.id ? 'Sending...' : 'Send Email'}
+                      </button>
+
                       <button
                         className="btn-small btn-delete"
                         onClick={() => handleDelete(invoice.id)}
