@@ -645,37 +645,37 @@ function Estimates() {
     doc.text('[Enter general description of work]', jobX + 10, y + headerH + 55);
     doc.setTextColor(0, 0, 0);
 
-    y += boxH + 14;
+    y += boxH + 10;
 
     const tableX = M;
     const tableW = pageW - 2 * M;
 
-const col = {
-  qty: tableX + 10,
-  desc: tableX + 55,
-  material: tableX + tableW - 235,
-  labor: tableX + tableW - 145,
-  total: tableX + tableW - 55
-};
+    const col = {
+      qty: tableX + 10,
+      desc: tableX + 55,
+      material: tableX + tableW - 210,
+      labor: tableX + tableW - 135,
+      total: tableX + tableW - 55
+    };
     doc.setFillColor(...BLUE);
-    doc.rect(tableX, y, tableW, 18, 'F');
+    doc.rect(tableX, y, tableW, 16, 'F');
     doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9);
-    doc.text('QTY', col.qty, y + 13);
-    doc.text('DESCRIPTION', col.desc, y + 13);
-    doc.text('MATERIAL', col.material, y + 13, { align: 'right' });
-    doc.text('LABOR', col.labor, y + 13, { align: 'right' });
-    doc.text('TOTAL', col.total, y + 13, { align: 'right' });
+    doc.setFontSize(8);
+    doc.text('QTY', col.qty, y + 11);
+    doc.text('DESCRIPTION', col.desc, y + 11);
+    doc.text('MATERIAL', col.material, y + 11, { align: 'right' });
+    doc.text('LABOR', col.labor, y + 11, { align: 'right' });
+    doc.text('TOTAL', col.total, y + 11, { align: 'right' });
 
     doc.setTextColor(0, 0, 0);
-    y += 24;
+    y += 22;
 
     doc.setDrawColor(200);
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
+    doc.setFontSize(8);
 
-    const lineHeight = 14;
+    const lineHeight = 12;
 
     const ensureSpace = (needed: number) => {
       if (y + needed > pageH - 140) {
@@ -692,14 +692,13 @@ const col = {
       const labor = Number(item.labor_cost) || 0;
       const total = Number(item.total_cost) || material + labor;
 
-   const descRightPadding = 28;
+      const descRightPadding = 20;
+      const descLines = doc.splitTextToSize(
+        safeText(item.description),
+        col.material - col.desc - descRightPadding
+      );
 
-const descLines = doc.splitTextToSize(
-  safeText(item.description),
-  col.material - col.desc - descRightPadding
-);
-
-const rowH2 = Math.max(descLines.length * lineHeight, lineHeight) + 14;
+      const rowH2 = Math.max(descLines.length * lineHeight, lineHeight) + 12;
       doc.rect(tableX, y - 10, tableW, rowH2);
 
       doc.text(String(qty), col.qty, y);
@@ -715,89 +714,97 @@ const rowH2 = Math.max(descLines.length * lineHeight, lineHeight) + 14;
       y += rowH2;
     });
 
-    ensureSpace(120);
+    ensureSpace(100);
 
     const totalsW = 200;
     const totalsX = tableX + tableW - totalsW;
     const totalsY = y + 10;
 
     doc.setDrawColor(180);
-    doc.rect(totalsX, totalsY, totalsW, 50);
+    doc.rect(totalsX, totalsY, totalsW, 44);
 
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
+    doc.setFontSize(9);
 
     doc.setFillColor(...BLUE);
-    doc.rect(totalsX, totalsY, totalsW, 22, 'F');
+    doc.rect(totalsX, totalsY, totalsW, 18, 'F');
     doc.setTextColor(255, 255, 255);
-    doc.text('TOTAL', totalsX + 10, totalsY + 15);
-    doc.text(fmtMoney(totalAmount), totalsX + totalsW - 10, totalsY + 15, { align: 'right' });
+    doc.text('TOTAL', totalsX + 10, totalsY + 12);
+    doc.text(fmtMoney(totalAmount), totalsX + totalsW - 10, totalsY + 12, { align: 'right' });
 
     doc.setTextColor(0, 0, 0);
+    doc.setFillColor(...LIGHT_GRAY);
+    doc.rect(totalsX, totalsY + 18, totalsW, 26, 'F');
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.text(`Deposit (${depositPercentage.toFixed(0)}%):`, totalsX + 10, totalsY + 30);
+    doc.text(fmtMoney(requiredDeposit), totalsX + totalsW - 10, totalsY + 30, { align: 'right' });
+    doc.text('Balance due:', totalsX + 10, totalsY + 40);
+    doc.text(fmtMoney(remainingBalance), totalsX + totalsW - 10, totalsY + 40, { align: 'right' });
 
-    y = totalsY + 70;
+    y = totalsY + 56;
 
-    ensureSpace(120);
+    ensureSpace(90);
 
     doc.setFillColor(...LIGHT_GRAY);
-    doc.rect(M, y, tableW, 58, 'F');
+    doc.rect(M, y, tableW, 48, 'F');
     doc.setDrawColor(180);
-    doc.rect(M, y, tableW, 58);
+    doc.rect(M, y, tableW, 48);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    doc.text('PAYMENT TERMS', M + 10, y + 16);
-    doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
+    doc.text('PAYMENT TERMS', M + 10, y + 14);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
     doc.text(
       `Required deposit (${depositPercentage.toFixed(0)}%): ${fmtMoney(requiredDeposit)}`,
       M + 10,
-      y + 34
+      y + 28
     );
     doc.text(
       `Remaining balance due on completion: ${fmtMoney(remainingBalance)}`,
       M + 10,
-      y + 48
+      y + 40
     );
 
-    y += 78;
+    y += 60;
 
-    ensureSpace(120);
+    ensureSpace(100);
 
     doc.setFillColor(...BLUE);
-    doc.rect(M, y, tableW, 18, 'F');
+    doc.rect(M, y, tableW, 14, 'F');
     doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    doc.text('SCOPE OF WORK', M + 10, y + 13);
+    doc.setFontSize(9);
+    doc.text('SCOPE OF WORK', M + 10, y + 10);
     doc.setTextColor(0, 0, 0);
 
-    y += 28;
-
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-
-    const scope = safeText(typedEstimate.notes);
-    const scopeLines = doc.splitTextToSize(scope || '—', tableW - 20);
-    const scopeBoxH = Math.max(70, scopeLines.length * 12 + 20);
-
-    doc.setDrawColor(180);
-    doc.rect(M, y - 10, tableW, scopeBoxH);
-
-    let sy = y + 10;
-    scopeLines.forEach((line: string) => {
-      doc.text(line, M + 10, sy);
-      sy += 12;
-    });
-
-    y = y - 10 + scopeBoxH + 20;
-
-    ensureSpace(120);
+    y += 20;
 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
 
+    const scope = safeText(typedEstimate.notes);
+    const scopeLines = doc.splitTextToSize(scope || '—', tableW - 20);
+    const scopeBoxH = Math.max(60, scopeLines.length * 10 + 16);
+
+    doc.setDrawColor(180);
+    doc.rect(M, y - 10, tableW, scopeBoxH);
+
+    let sy = y + 8;
+    scopeLines.forEach((line: string) => {
+      doc.text(line, M + 10, sy);
+      sy += 10;
+    });
+
+    y = y - 10 + scopeBoxH + 15;
+
+    ensureSpace(80);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+
     doc.text('Please reference this estimate number in all correspondence.', M, y);
-    y += 12;
+    y += 10;
     doc.text(`Questions? ${COMPANY.phone} | ${COMPANY.email}`, M, y);
     y += 24;
 
