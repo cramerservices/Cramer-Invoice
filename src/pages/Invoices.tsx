@@ -491,13 +491,13 @@ function Invoices() {
     const tableX = M;
     const tableW = pageW - 2 * M;
 
-    const col = {
-      qty: tableX + 10,
-      desc: tableX + 55,
-      material: tableX + tableW - 180,
-      labor: tableX + tableW - 120,
-      total: tableX + tableW - 55
-    };
+   const col = {
+  qty: tableX + 10,
+  desc: tableX + 55,
+  material: tableX + tableW - 210,
+  labor: tableX + tableW - 135,
+  total: tableX + tableW - 55
+};
 
     doc.setFillColor(...BLUE);
     doc.rect(tableX, y, tableW, 16, 'F');
@@ -534,11 +534,13 @@ function Invoices() {
       const labor = Number(item.labor_cost) || 0;
       const total = Number(item.total_cost) || material + labor;
 
-      const descLines = doc.splitTextToSize(
-        safeText(item.description),
-        col.material - 15 - col.desc
-      );
-      const rowH2 = Math.max(descLines.length * lineHeight, lineHeight) + 10;
+   const descRightPadding = 20;
+
+const descLines = doc.splitTextToSize(
+  safeText(item.description),
+  col.material - col.desc - descRightPadding
+);
+      const rowH2 = Math.max(descLines.length * lineHeight, lineHeight) + 14;
 
       doc.rect(tableX, y - 10, tableW, rowH2);
 
