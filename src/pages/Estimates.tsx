@@ -650,11 +650,11 @@ function Estimates() {
     const tableX = M;
     const tableW = pageW - 2 * M;
 
-  const col = {
+const col = {
   qty: tableX + 10,
   desc: tableX + 55,
-  material: tableX + tableW - 210,
-  labor: tableX + tableW - 135,
+  material: tableX + tableW - 235,
+  labor: tableX + tableW - 145,
   total: tableX + tableW - 55
 };
     doc.setFillColor(...BLUE);
@@ -692,7 +692,7 @@ function Estimates() {
       const labor = Number(item.labor_cost) || 0;
       const total = Number(item.total_cost) || material + labor;
 
-      const descRightPadding = 20;
+    const descRightPadding = 28;
 
 const descLines = doc.splitTextToSize(
   safeText(item.description),
