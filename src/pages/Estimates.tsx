@@ -692,7 +692,7 @@ const col = {
       const labor = Number(item.labor_cost) || 0;
       const total = Number(item.total_cost) || material + labor;
 
-    const descRightPadding = 28;
+   const descRightPadding = 28;
 
 const descLines = doc.splitTextToSize(
   safeText(item.description),
