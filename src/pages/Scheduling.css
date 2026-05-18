@@ -1,0 +1,175 @@
+.scheduling-page {
+  width: 100%;
+}
+
+.schedule-muted {
+  color: #6c757d;
+  margin: 0.25rem 0 0;
+}
+
+.schedule-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.schedule-toolbar {
+  background: #fff;
+  border: 1px solid #dee2e6;
+  border-radius: 12px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  display: flex;
+  gap: 1rem;
+  align-items: end;
+  flex-wrap: wrap;
+}
+
+.schedule-day-card {
+  background: #f8f9fb;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  display: grid;
+  gap: 0.25rem;
+  min-width: 240px;
+}
+
+.schedule-day-card span {
+  color: #6c757d;
+  font-size: 0.9rem;
+}
+
+.schedule-grid {
+  display: grid;
+  grid-template-columns: 1.6fr 0.9fr;
+  gap: 1rem;
+  align-items: start;
+}
+
+.schedule-section {
+  background: #fff;
+  border: 1px solid #dee2e6;
+  border-radius: 12px;
+  padding: 1rem;
+}
+
+.schedule-section h3 {
+  margin-top: 0;
+}
+
+.schedule-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.schedule-card,
+.block-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 0.9rem;
+  background: #f8f9fb;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.schedule-card-main {
+  min-width: 0;
+}
+
+.schedule-card-side {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  align-items: flex-end;
+  min-width: 150px;
+}
+
+.schedule-time {
+  font-weight: 800;
+  color: #0d6efd;
+  margin-bottom: 0.25rem;
+}
+
+.schedule-title {
+  font-weight: 700;
+  color: #1b1f24;
+}
+
+.schedule-subtitle {
+  color: #6c757d;
+  font-size: 0.9rem;
+  margin-top: 0.15rem;
+}
+
+.schedule-notes {
+  margin-top: 0.5rem;
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  padding: 0.5rem;
+  color: #495057;
+  font-size: 0.9rem;
+}
+
+.btn-warning {
+  background: #fff3cd;
+  color: #856404;
+  border: 1px solid #ffeeba;
+}
+
+.btn-warning:hover {
+  background: #ffe8a1;
+}
+
+.btn-complete {
+  background: #d5f4e6;
+  color: #146c43;
+  border: 1px solid #badbcc;
+}
+
+.btn-complete:hover {
+  background: #c3e6cb;
+}
+
+.status-reschedule_requested {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.status-confirmed {
+  background: #d5f4e6;
+  color: #146c43;
+}
+
+.status-completed {
+  background: #d4edff;
+  color: #0d6efd;
+}
+
+.status-cancelled {
+  background: #f8d7da;
+  color: #842029;
+}
+
+.status-no_show {
+  background: #e2e3e5;
+  color: #41464b;
+}
+
+@media (max-width: 900px) {
+  .schedule-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .schedule-card,
+  .block-card {
+    flex-direction: column;
+  }
+
+  .schedule-card-side {
+    align-items: stretch;
+    min-width: 0;
+  }
+}
