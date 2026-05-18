@@ -252,9 +252,84 @@ function Scheduling() {
         if (error) throw error;
       }
 
-      setShowAppointmentForm(false);
-      resetAppointmentForm();
-      await fetchData();
+     const saveAppointment = async (e) => {
+  e.preventDefault();
+
+  try {
+    const payload = {
+      customer_id: appointmentForm.customer_id || null,
+      customer_name: appointmentForm.customer_name.trim(),
+      customer_email: appointmentForm.customer_email.trim().toLowerCase(),
+      customer_phone: appointmentForm.customer_phone.trim(),
+      service_address: appointmentForm.service_address.trim() || null,
+      service_type: appointmentForm.service_type,
+      appointment_date: appointmentForm.appointment_date,
+      start_time: appointmentForm.start_time,
+      end_time: getEndTime(
+        appointmentForm.start_time,
+        appointmentForm.duration_minutes
+      ),
+      duration_minutes: Number(appointmentForm.duration_minutes || 60),
+      buffer_minutes: 15,
+      notes: appointmentForm.notes.trim() || null,
+      status: appointmentForm.status,
+      source: 'crm_manual',
+      updated_at: new Date().toISOString()
+    };
+
+    if (!payload.customer_name || !payload.customer_email || !payload.customer_phone) {
+      alert('Customer name, email, and phone are required.');
+      return;
+    }
+
+    let savedAppointment = null;
+
+    if (editingAppointment) {
+      const { data, error } = await supabase
+        .from('appointments')
+        .update(payload)
+        .eq('id', editingAppointment.id)
+        .select('*')
+        .single();
+
+      if (error) throw error;
+      savedAppointment = data;
+    } else {
+      const { data, error } = await supabase
+        .from('appointments')
+        .insert([payload])
+        .select('*')
+        .single();
+
+      if (error) throw error;
+      savedAppointment = data;
+    }
+
+    if (savedAppointment?.id && savedAppointment.customer_email) {
+      const { data: emailData, error: emailError } = await supabase.functions.invoke(
+        'send-appointment-email',
+        {
+          body: {
+            appointmentId: savedAppointment.id,
+            type: 'confirmation'
+          }
+        }
+      );
+
+      if (emailError || !emailData?.success) {
+        console.error('Confirmation email failed', emailError || emailData);
+        alert('Appointment saved, but the confirmation email did not send.');
+      }
+    }
+
+    setShowAppointmentForm(false);
+    resetAppointmentForm();
+    await fetchData();
+  } catch (error) {
+    console.error('Error saving appointment:', error);
+    alert(`Failed to save appointment: ${error.message || 'Unknown error'}`);
+  }
+};
     } catch (error) {
       console.error('Error saving appointment:', error);
       alert(`Failed to save appointment: ${error.message || 'Unknown error'}`);
