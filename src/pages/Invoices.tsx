@@ -12,6 +12,15 @@ const COMPANY = {
 
 const LOGO_URL = `${import.meta.env.BASE_URL}CramerLogoText.png`;
 const PDF_BUCKET = 'service-docs';
+const FREE_SERVICE_DESCRIPTION = 'Free Service — Membership Plan Benefit';
+
+function parseFreeServiceAllowance(features?: string[] | null) {
+  for (const feature of features || []) {
+    const match = feature.match(/(\d+)\s+free service/i);
+    if (match) return Number(match[1]);
+  }
+  return 0;
+}
 
 async function fetchImageAsDataURL(url: string) {
   const res = await fetch(url, { cache: 'no-store' });
@@ -101,6 +110,8 @@ function Invoices() {
   const [loading, setLoading] = useState(true);
   const [pdfBusyId, setPdfBusyId] = useState<string | null>(null);
   const [emailBusyId, setEmailBusyId] = useState<string | null>(null);
+  const [freeServiceSelected, setFreeServiceSelected] = useState(false);
+  const [freeServiceInfo, setFreeServiceInfo] = useState({ loading: false, allowance: 0, used: 0, remaining: 0 });
 
   const [formData, setFormData] = useState({
     invoiceNumber: '',
@@ -126,6 +137,108 @@ function Invoices() {
       generateInvoiceNumber();
     }
   }, [showForm]);
+
+  useEffect(() => {
+    setFreeServiceSelected(false);
+    setLineItems((items) =>
+      items.filter((item) => item.description !== FREE_SERVICE_DESCRIPTION).length
+        ? items.filter((item) => item.description !== FREE_SERVICE_DESCRIPTION)
+        : [{ description: '', materialCost: '', laborCost: '' }]
+    );
+
+    if (!formData.customerId) {
+      setFreeServiceInfo({ loading: false, allowance: 0, used: 0, remaining: 0 });
+      return;
+    }
+
+    loadFreeServiceInfo(formData.customerId);
+  }, [formData.customerId]);
+
+  const loadFreeServiceInfo = async (customerId: string) => {
+    setFreeServiceInfo({ loading: true, allowance: 0, used: 0, remaining: 0 });
+    try {
+      const { data: customer, error: customerError } = await supabase
+        .from('customers')
+        .select('id, portal_customer_id')
+        .eq('id', customerId)
+        .single();
+      if (customerError) throw customerError;
+
+      let membership: any = null;
+      if (customer?.portal_customer_id) {
+        const { data, error } = await supabase
+          .from('customer_memberships')
+          .select('*, plan:maintenance_plans(*)')
+          .eq('customer_id', customer.portal_customer_id)
+          .eq('status', 'active')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (error) throw error;
+        membership = data;
+      }
+
+      if (!membership) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('customer_membership_id')
+          .eq('customer_id', customerId)
+          .maybeSingle();
+        if (profile?.customer_membership_id) {
+          const { data, error } = await supabase
+            .from('customer_memberships')
+            .select('*, plan:maintenance_plans(*)')
+            .eq('id', profile.customer_membership_id)
+            .eq('status', 'active')
+            .maybeSingle();
+          if (error) throw error;
+          membership = data;
+        }
+      }
+
+      const allowance = parseFreeServiceAllowance(membership?.plan?.features);
+      let used = 0;
+      if (allowance > 0) {
+        const { data: eligibleInvoices, error: invoicesError } = await supabase
+          .from('crm_invoices')
+          .select('id')
+          .eq('customer_id', customerId)
+          .neq('status', 'cancelled');
+        if (invoicesError) throw invoicesError;
+
+        const ids = (eligibleInvoices || []).map((invoice: any) => invoice.id);
+        if (ids.length) {
+          const { data: freeItems, error: itemsError } = await supabase
+            .from('crm_invoice_line_items')
+            .select('invoice_id, description')
+            .in('invoice_id', ids)
+            .ilike('description', 'Free Service%');
+          if (itemsError) throw itemsError;
+          used = new Set((freeItems || []).map((item: any) => item.invoice_id)).size;
+        }
+      }
+
+      setFreeServiceInfo({ loading: false, allowance, used, remaining: Math.max(allowance - used, 0) });
+    } catch (error) {
+      console.error('Error checking free service benefits:', error);
+      setFreeServiceInfo({ loading: false, allowance: 0, used: 0, remaining: 0 });
+    }
+  };
+
+  const handleFreeServiceChange = (checked: boolean) => {
+    setFreeServiceSelected(checked);
+    if (checked) {
+      setLineItems((items) => [
+        { description: FREE_SERVICE_DESCRIPTION, materialCost: '0', laborCost: '0' },
+        ...items.filter((item) => item.description !== FREE_SERVICE_DESCRIPTION),
+      ]);
+    } else {
+      setLineItems((items) => {
+        const remaining = items.filter((item) => item.description !== FREE_SERVICE_DESCRIPTION);
+        return remaining.length ? remaining : [{ description: '', materialCost: '', laborCost: '' }];
+      });
+    }
+  };
 
   const generateInvoiceNumber = async () => {
     try {
@@ -234,6 +347,17 @@ function Invoices() {
 
     if (paymentsError) throw paymentsError;
 
+    const { data: invoiceItems, error: invoiceItemsError } = await supabase
+      .from('crm_invoice_line_items')
+      .select('description')
+      .eq('invoice_id', invoice.id);
+
+    if (invoiceItemsError) throw invoiceItemsError;
+
+    const freeServiceApplied = (invoiceItems || []).some((item: any) =>
+      /^free service\b/i.test(String(item.description || '').trim())
+    );
+
     const { data: existingRow, error: existingError } = await supabase
       .from('services_completed')
       .select('id, payload, pdf_path')
@@ -264,7 +388,8 @@ function Invoices() {
           ? existingPayload.approved
           : null,
       payments: paymentRows || [],
-      pdf_url: finalPdfUrl
+      pdf_url: finalPdfUrl,
+      free_service_applied: freeServiceApplied
     };
 
     const summary = `Invoice ${invoice.invoice_number} ${invoice.status}. Balance due: $${Number(
@@ -903,6 +1028,8 @@ const descLines = doc.splitTextToSize(
       status: 'draft'
     });
     setLineItems([{ description: '', materialCost: '', laborCost: '' }]);
+    setFreeServiceSelected(false);
+    setFreeServiceInfo({ loading: false, allowance: 0, used: 0, remaining: 0 });
   };
 
   if (loading) {
@@ -1015,6 +1142,28 @@ const descLines = doc.splitTextToSize(
               </select>
             </div>
 
+            <div className="form-group" style={{ background: '#eef7ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: 14 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: freeServiceInfo.remaining > 0 ? 'pointer' : 'default' }}>
+                <input
+                  type="checkbox"
+                  checked={freeServiceSelected}
+                  onChange={(event) => handleFreeServiceChange(event.target.checked)}
+                  disabled={!formData.customerId || freeServiceInfo.loading || freeServiceInfo.remaining < 1}
+                  style={{ width: 18, height: 18 }}
+                />
+                <span>Use Free Service Benefit</span>
+              </label>
+              <div style={{ marginTop: 8, color: '#4b5563', fontSize: 14 }}>
+                {!formData.customerId
+                  ? 'Select a customer to check their membership benefits.'
+                  : freeServiceInfo.loading
+                    ? 'Checking membership benefits...'
+                    : freeServiceInfo.allowance > 0
+                      ? `${freeServiceInfo.remaining} of ${freeServiceInfo.allowance} free services remaining.`
+                      : 'This customer does not have free services available on an active plan.'}
+              </div>
+            </div>
+
             <div className="form-section" style={{ marginTop: '24px' }}>
               <h4 style={{ marginBottom: '16px' }}>Line Items</h4>
               {lineItems.map((item, index) => (
@@ -1030,7 +1179,7 @@ const descLines = doc.splitTextToSize(
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
                     <strong>Item {index + 1}</strong>
-                    {lineItems.length > 1 && (
+                    {lineItems.length > 1 && item.description !== FREE_SERVICE_DESCRIPTION && (
                       <button
                         type="button"
                         onClick={() => removeLineItem(index)}
@@ -1048,6 +1197,7 @@ const descLines = doc.splitTextToSize(
                       onChange={(e) => handleLineItemChange(index, 'description', e.target.value)}
                       rows={2}
                       required
+                      readOnly={item.description === FREE_SERVICE_DESCRIPTION}
                     />
                   </div>
 
@@ -1061,6 +1211,7 @@ const descLines = doc.splitTextToSize(
                         value={item.materialCost}
                         onChange={(e) => handleLineItemChange(index, 'materialCost', e.target.value)}
                         placeholder="0.00"
+                        readOnly={item.description === FREE_SERVICE_DESCRIPTION}
                       />
                     </div>
 
@@ -1073,6 +1224,7 @@ const descLines = doc.splitTextToSize(
                         value={item.laborCost}
                         onChange={(e) => handleLineItemChange(index, 'laborCost', e.target.value)}
                         placeholder="0.00"
+                        readOnly={item.description === FREE_SERVICE_DESCRIPTION}
                       />
                     </div>
 
