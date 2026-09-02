@@ -14,8 +14,11 @@ const LOGO_URL = `${import.meta.env.BASE_URL}CramerLogoText.png`;
 const PDF_BUCKET = 'service-docs';
 const FREE_SERVICE_DESCRIPTION = 'Free Service — Membership Plan Benefit';
 
-function parseFreeServiceAllowance(features?: string[] | null) {
-  for (const feature of features || []) {
+function parseFreeServiceAllowance(plan?: { free_services_per_year?: number | null; features?: string[] | null } | null) {
+  const configuredAllowance = Number(plan?.free_services_per_year);
+  if (Number.isFinite(configuredAllowance)) return Math.max(configuredAllowance, 0);
+
+  for (const feature of plan?.features || []) {
     const match = feature.match(/(\d+)\s+free service/i);
     if (match) return Number(match[1]);
   }
@@ -196,14 +199,23 @@ function Invoices() {
         }
       }
 
-      const allowance = parseFreeServiceAllowance(membership?.plan?.features);
+      const allowance = parseFreeServiceAllowance(membership?.plan);
       let used = 0;
       if (allowance > 0) {
-        const { data: eligibleInvoices, error: invoicesError } = await supabase
+        let eligibleInvoiceQuery = supabase
           .from('crm_invoices')
           .select('id')
           .eq('customer_id', customerId)
           .neq('status', 'cancelled');
+
+        if (membership?.start_date) {
+          eligibleInvoiceQuery = eligibleInvoiceQuery.gte('invoice_date', membership.start_date);
+        }
+        if (membership?.end_date) {
+          eligibleInvoiceQuery = eligibleInvoiceQuery.lt('invoice_date', membership.end_date);
+        }
+
+        const { data: eligibleInvoices, error: invoicesError } = await eligibleInvoiceQuery;
         if (invoicesError) throw invoicesError;
 
         const ids = (eligibleInvoices || []).map((invoice: any) => invoice.id);
