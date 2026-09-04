@@ -100,7 +100,6 @@ function Customers() {
       }
       if (serviceForm.appointment_id) {
         await supabase.from('appointments').update({ status: 'completed', updated_at: new Date().toISOString() }).eq('id', serviceForm.appointment_id);
-        await supabase.functions.invoke('customer-followups', { body: { action: 'review_request', appointmentId: serviceForm.appointment_id } });
       }
       setServiceForm(emptyService); setPhotos([]); await loadCustomerProfile(selectedCustomer);
     } catch (error) { alert(`Failed to save service record: ${error.message}`); }
