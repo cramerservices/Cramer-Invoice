@@ -88,24 +88,3 @@ CREATE POLICY "CRM can update customer service photos"
   ON storage.objects FOR UPDATE USING (bucket_id = 'customer-service-photos');
 CREATE POLICY "CRM can delete customer service photos"
   ON storage.objects FOR DELETE USING (bucket_id = 'customer-service-photos');
-
--- Run the maintenance reminder scan every morning at 9:00 UTC. The function
--- keeps a log so each equipment due date is emailed only once.
-CREATE EXTENSION IF NOT EXISTS pg_cron;
-CREATE EXTENSION IF NOT EXISTS pg_net;
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'daily-customer-maintenance-reminders') THEN
-    PERFORM cron.schedule(
-      'daily-customer-maintenance-reminders',
-      '0 9 * * *',
-      $job$
-        SELECT net.http_post(
-          url := 'https://qsiimareoiyrkompuobi.supabase.co/functions/v1/customer-followups',
-          headers := '{"Content-Type":"application/json","apikey":"sb_publishable_msZgwZ5Sascz_SYnTXQuQw_Km1k62pX"}'::jsonb,
-          body := '{"action":"maintenance_scan"}'::jsonb
-        );
-      $job$
-    );
-  END IF;
-END $$;
