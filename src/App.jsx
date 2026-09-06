@@ -14,6 +14,7 @@ import CrmLogin from './pages/CrmLogin';
 import './App.css';
 
 const ownerEmail = 'cramerservicesllc@gmail.com';
+const approvedStaffEmails = ['cramerservicesllc+staff@gmail.com'];
 const staffRoles = ['admin', 'staff', 'technician', 'tech'];
 
 function App() {
@@ -35,7 +36,7 @@ function App() {
       }
 
       const email = (nextSession.user.email || '').toLowerCase();
-      if (email === ownerEmail) {
+      if (email === ownerEmail || approvedStaffEmails.includes(email)) {
         setStaffAllowed(true); setAuthLoading(false); return;
       }
 
