@@ -59,6 +59,8 @@
   width: 100%;
 }
 
+.crm-auth-loading{min-height:100vh;display:grid;place-items:center;background:#f8fafc;color:#475569;font-size:1.1rem}.nav-links .sign-out-nav{color:#ffd6d6}.nav-links .sign-out-nav:hover{background:#8b2c2c;color:#fff}
+
 @media (max-width: 768px) {
   .app-nav {
     flex-direction: column;
