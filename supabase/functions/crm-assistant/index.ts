@@ -4,6 +4,7 @@ const cors = { 'Access-Control-Allow-Origin': 'https://www.cramer.services', 'Ac
 const json = (status: number, value: unknown) => new Response(JSON.stringify(value), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
 const staffRoles = new Set(['admin', 'staff', 'technician', 'tech']);
 const ownerEmail = 'cramerservicesllc@gmail.com';
+const approvedStaffEmails = new Set(['cramerservicesllc+staff@gmail.com']);
 const stopWords = new Set(['what','when','where','which','show','find','give','tell','does','have','with','from','this','that','customer','equipment','installed','address','service','invoice','estimate','please','about','their','there','last','for','the','and','are','was']);
 
 function searchableTerms(question: string) {
@@ -27,7 +28,7 @@ Deno.serve(async (request) => {
     const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
     const email = (user.email || '').toLowerCase();
     const { data: profile } = await admin.from('profiles').select('role').eq('auth_user_id', user.id).maybeSingle();
-    if (email !== ownerEmail && !staffRoles.has(String(profile?.role || '').toLowerCase())) return json(403, { success: false, error: 'This account is not approved for CRM access.' });
+    if (email !== ownerEmail && !approvedStaffEmails.has(email) && !staffRoles.has(String(profile?.role || '').toLowerCase())) return json(403, { success: false, error: 'This account is not approved for CRM access.' });
 
     const body = await request.json();
     const question = String(body.question || '').trim().slice(0, 1000);
