@@ -107,6 +107,14 @@ function Customers() {
   };
 
   const photoUrl = (path) => supabase.storage.from('customer-service-photos').getPublicUrl(path).data.publicUrl;
+  const openEquipmentProfile = async () => {
+    if (!editingCustomer) return;
+    setShowForm(false);
+    await loadCustomerProfile(editingCustomer);
+    window.setTimeout(() => {
+      document.querySelector('.customer-profile-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 50);
+  };
   if (loading) return <div className="loading">Loading customers...</div>;
 
   return <div className="page-container">
@@ -114,6 +122,7 @@ function Customers() {
     {showForm && <div className="form-card"><h3>{editingCustomer ? 'Edit Customer' : 'New Customer'}</h3><form onSubmit={handleSubmit}>
       <div className="form-row"><Field label="Name *" value={formData.name} onChange={(value) => setFormData({ ...formData, name: value })} required /><Field label="Email" type="email" value={formData.email} onChange={(value) => setFormData({ ...formData, email: value })} /><Field label="Phone" value={formData.phone} onChange={(value) => setFormData({ ...formData, phone: value })} /></div>
       <Area label="Address" value={formData.address} onChange={(value) => setFormData({ ...formData, address: value })} /><Area label="Notes" value={formData.notes} onChange={(value) => setFormData({ ...formData, notes: value })} />
+      {editingCustomer && <div className="equipment-profile-callout"><div><strong>Equipment & Service History</strong><p>Add model and serial numbers, system details, completed tune-ups, recommendations, and service photos for this customer.</p></div><button type="button" className="btn-view equipment-profile-button" onClick={openEquipmentProfile}>Manage Equipment & Service History</button></div>}
       <div className="form-actions"><button type="button" className="btn-secondary" onClick={() => { setShowForm(false); setEditingCustomer(null); setFormData(emptyCustomer); }}>Cancel</button><button className="btn-primary">Save Customer</button></div>
     </form></div>}
     <div className="table-container"><table className="data-table"><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Address</th><th>Portal</th><th>Actions</th></tr></thead><tbody>{customers.map((customer) => <tr key={customer.id}><td><strong>{customer.name}</strong></td><td>{customer.email || '-'}</td><td>{customer.phone || '-'}</td><td>{customer.address || '-'}</td><td>{customer.linked_profile_id ? 'Linked' : '-'}</td><td><div className="action-buttons"><button className="btn-small btn-view" onClick={() => loadCustomerProfile(customer)}>Profile</button><button className="btn-small btn-edit" onClick={() => { setEditingCustomer(customer); setFormData({ name: customer.name || '', email: customer.email || '', phone: customer.phone || '', address: customer.address || '', notes: customer.notes || '' }); setShowForm(true); }}>Edit</button></div></td></tr>)}</tbody></table>{!customers.length && <div className="empty-state">No customers yet.</div>}</div>
