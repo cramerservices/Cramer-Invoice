@@ -248,6 +248,22 @@
   background: #f8fafc;
 }
 
+.equipment-profile-callout {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin-top: 20px;
+  padding: 18px;
+  border: 1px solid #9fc5e8;
+  border-radius: 8px;
+  background: #eef7ff;
+}
+
+.equipment-profile-callout strong { color: #1e3a5f; font-size: 16px; }
+.equipment-profile-callout p { margin: 6px 0 0; color: #475569; }
+.equipment-profile-button { border: 0; padding: 11px 16px; border-radius: 5px; cursor: pointer; white-space: nowrap; }
+
 .profile-heading {
   display: flex;
   justify-content: space-between;
@@ -308,6 +324,8 @@
 @media (max-width: 700px) {
   .customer-profile-panel { padding: 16px; }
   .profile-heading { align-items: flex-start; flex-direction: column; }
+  .equipment-profile-callout { align-items: stretch; flex-direction: column; }
+  .equipment-profile-button { white-space: normal; }
 }
 
 .status-partial {
