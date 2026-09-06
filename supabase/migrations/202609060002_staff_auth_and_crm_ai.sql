@@ -9,7 +9,10 @@ RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS
     SELECT 1 FROM profiles
     WHERE auth_user_id = auth.uid()
       AND lower(coalesce(role, '')) IN ('admin', 'staff', 'technician', 'tech')
-  ) OR lower(coalesce(auth.jwt()->>'email', '')) = 'cramerservicesllc@gmail.com';
+  ) OR lower(coalesce(auth.jwt()->>'email', '')) IN (
+    'cramerservicesllc@gmail.com',
+    'cramerservicesllc+staff@gmail.com'
+  );
 $$;
 
 CREATE OR REPLACE FUNCTION current_crm_customer_id()
