@@ -57,7 +57,7 @@ function Scheduling() {
       const [appointmentsRes, blocksRes, customersRes] = await Promise.all([
         supabase
           .from('appointments')
-          .select('*')
+          .select('*, appointment_request_photos(*)')
           .eq('appointment_date', selectedDate)
           .order('start_time', { ascending: true }),
 
@@ -87,6 +87,9 @@ function Scheduling() {
       setLoading(false);
     }
   };
+
+  const requestPhotoUrl = (path) =>
+    supabase.storage.from('customer-service-photos').getPublicUrl(path).data.publicUrl;
 
   const formatTime = (time) => {
     if (!time) return '-';
@@ -756,6 +759,19 @@ function Scheduling() {
                     {appointment.notes && (
                       <div className="schedule-notes">
                         {appointment.notes}
+                      </div>
+                    )}
+
+                    {(appointment.appointment_request_photos || []).length > 0 && (
+                      <div className="appointment-photo-section">
+                        <strong>Customer photos</strong>
+                        <div className="appointment-photo-grid">
+                          {appointment.appointment_request_photos.map((photo) => (
+                            <a key={photo.id} href={requestPhotoUrl(photo.storage_path)} target="_blank" rel="noreferrer">
+                              <img src={requestPhotoUrl(photo.storage_path)} alt={photo.caption || 'Customer service request'} />
+                            </a>
+                          ))}
+                        </div>
                       </div>
                     )}
                   </div>
