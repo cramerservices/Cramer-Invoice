@@ -1935,35 +1935,27 @@ const handleEmailEstimateClick = async (estimateId: string) => {
                         {pdfBusyId === estimate.id ? 'Working...' : 'PDF'}
                       </button>
 
-                   {estimate.status === 'approved' && (
-  <>
-    <button
-      className="btn-small"
-      style={{
-        backgroundColor: '#2563eb',
-        color: '#fff',
-        border: 'none'
-      }}
-      onClick={() => handleCreateInvoiceClick(estimate.id)}
-      disabled={invoiceBusyId === estimate.id}
-    >
-      {invoiceBusyId === estimate.id ? 'Creating...' : 'Create Invoice'}
-    </button>
+                      {estimate.status === 'approved' && (
+                        <button
+                          className="btn-small"
+                          style={{ backgroundColor: '#2563eb', color: '#fff', border: 'none' }}
+                          onClick={() => handleCreateInvoiceClick(estimate.id)}
+                          disabled={invoiceBusyId === estimate.id}
+                        >
+                          {invoiceBusyId === estimate.id ? 'Creating...' : 'Create Invoice'}
+                        </button>
+                      )}
 
-    <button
-      className="btn-small"
-      style={{
-        backgroundColor: '#7c3aed',
-        color: '#fff',
-        border: 'none'
-      }}
-      onClick={() => handleEmailEstimateClick(estimate.id)}
-      disabled={emailBusyId === estimate.id}
-    >
-      {emailBusyId === estimate.id ? 'Preparing...' : 'Email Estimate'}
-    </button>
-  </>
-)}
+                      {(estimate.status === 'sent' || estimate.status === 'approved') && (
+                        <button
+                          className="btn-small"
+                          style={{ backgroundColor: '#7c3aed', color: '#fff', border: 'none' }}
+                          onClick={() => handleEmailEstimateClick(estimate.id)}
+                          disabled={emailBusyId === estimate.id}
+                        >
+                          {emailBusyId === estimate.id ? 'Preparing...' : 'Email Estimate'}
+                        </button>
+                      )}
 
                       <button
                         className="btn-small btn-delete"
